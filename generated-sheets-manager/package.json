@@ -1,9 +1,10 @@
 {
   "name": "generated-sheets-manager",
-  "version": "1.0.0",
-  "description": "处理“历史生成记录”的增删改查及数据迁移",
+  "version": "2.0.0",
+  "description": "处理“历史生成记录”的增删改查，并支持同步删除飞书云端文件。",
   "main": "index.js",
   "dependencies": {
-    "mongodb": "^4.10.0"
+    "mongodb": "^4.10.0",
+    "axios": "^1.7.2"
   }
 }
