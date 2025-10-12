@@ -1,0 +1,10 @@
+{
+  "name": "kol-add-work-function",
+  "version": "1.0.0",
+  "description": "新增一条作品记录，支持合作作品与非合作作品。",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}
+

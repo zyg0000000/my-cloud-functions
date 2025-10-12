@@ -1,0 +1,14 @@
+{
+  "name": "kol-management-backend-functions",
+  "version": "1.0.0",
+  "description": "后台云函数，用于任务中心的自动化处理和API服务。",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  },
+  "author": "",
+  "license": "ISC"
+}

@@ -1,0 +1,10 @@
+{
+  "name": "update-work",
+  "version": "1.0.0",
+  "description": "云函数：更新一条已存在的作品记录。",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}
+

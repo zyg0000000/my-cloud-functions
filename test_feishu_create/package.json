@@ -1,0 +1,10 @@
+{
+  "name": "feishu-create-test-function",
+  "version": "1.0.0",
+  "description": "一个用于测试飞书表格复制功能的云函数。",
+  "main": "test_feishu_create.js",
+  "dependencies": {
+    "axios": "^1.6.8"
+  }
+}
+

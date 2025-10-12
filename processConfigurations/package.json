@@ -1,0 +1,9 @@
+{
+  "name": "process-configurations",
+  "version": "1.0.0",
+  "description": "统一管理项目的所有全局配置",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  }
+}

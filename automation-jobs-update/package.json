@@ -1,0 +1,9 @@
+{
+  "name": "automation-jobs-update-function",
+  "version": "1.0.0",
+  "description": "Cloud function to update the status of an automation job.",
+  "main": "automation-jobs-update.js",
+  "dependencies": {
+    "mongodb": "^4.17.2"
+  }
+}

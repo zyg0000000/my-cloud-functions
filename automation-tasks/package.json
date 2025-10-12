@@ -1,0 +1,12 @@
+{
+  "name": "automation-tasks-cloud-function",
+  "version": "2.1.3",
+  "description": "Dependencies for the automation-tasks cloud function.",
+  "main": "automation-tasks.js",
+  "dependencies": {
+    "mongodb": "^6.3.0",
+    "@volcengine/tos-sdk": "^2.7.5"
+  }
+}
+
+

@@ -1,0 +1,12 @@
+{
+  "name": "kol-bulk-update-talents",
+  "version": "1.0.0",
+  "description": "Cloud function to safely bulk update existing talents.",
+  "main": "index.js",
+  "author": "Your Engineering Team",
+  "license": "ISC",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}
+

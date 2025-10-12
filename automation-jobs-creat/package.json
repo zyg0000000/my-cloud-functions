@@ -1,0 +1,11 @@
+{
+  "name": "automation-jobs-functions",
+  "version": "1.0.0",
+  "description": "Cloud functions for managing automation jobs and tasks.",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.0.0"
+  },
+  "author": "",
+  "license": "ISC"
+}
