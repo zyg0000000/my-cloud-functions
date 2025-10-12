@@ -1,0 +1,10 @@
+{
+  "name": "mapping-templates-api",
+  "version": "1.0.0",
+  "description": "Cloud function to manage Feishu sheet mapping templates.",
+  "main": "mapping-templates-api.js",
+  "dependencies": {
+    "mongodb": "^4.17.2"
+  }
+}
+

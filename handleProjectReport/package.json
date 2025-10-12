@@ -1,0 +1,9 @@
+{
+  "name": "handle-project-report",
+  "version": "1.0.0",
+  "description": "Handles all API requests for the project execution report feature.",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  }
+}
