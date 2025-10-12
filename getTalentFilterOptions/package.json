@@ -1,0 +1,9 @@
+{
+  "name": "get-talent-filter-options",
+  "version": "1.0.0",
+  "description": "Fetches distinct talent tiers and types for filter UI.",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.0.0"
+  }
+}

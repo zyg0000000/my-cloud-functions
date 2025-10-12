@@ -1,0 +1,11 @@
+{
+  "name": "kol-bulk-create-talents",
+  "version": "1.0.0",
+  "description": "Cloud function to safely bulk create new talents.",
+  "main": "index.js",
+  "author": "Your Engineering Team",
+  "license": "ISC",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}

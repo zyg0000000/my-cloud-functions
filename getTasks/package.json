@@ -1,0 +1,9 @@
+{
+  "name": "get-tasks-api",
+  "version": "1.0.0",
+  "description": "API to fetch pending tasks for the task center.",
+  "main": "getTasks.js",
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  }
+}

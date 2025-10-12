@@ -1,0 +1,9 @@
+{
+  "name": "get-project-performance-function",
+  "version": "1.0.0",
+  "description": "API to aggregate performance data for the KOL project dashboard.",
+  "main": "getProjectPerformance.js",
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  }
+}

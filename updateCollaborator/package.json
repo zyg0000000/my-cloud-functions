@@ -1,0 +1,9 @@
+{
+  "name": "update-collaboration",
+  "version": "1.1.0",
+  "description": "云函数：更新指定的一条合作记录，并包含自动状态更新等业务逻辑。",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}

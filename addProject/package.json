@@ -1,0 +1,9 @@
+{
+  "name": "add-project",
+  "version": "1.1.0",
+  "description": "云函数：创建一个新的项目文档。",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}

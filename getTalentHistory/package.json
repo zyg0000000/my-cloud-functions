@@ -1,0 +1,9 @@
+{
+  "name": "get-talent-history",
+  "version": "1.0.0",
+  "description": "Serverless function to get a talent's collaboration history, excluding a specific project.",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}

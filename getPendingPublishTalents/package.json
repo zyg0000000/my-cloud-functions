@@ -1,0 +1,9 @@
+{
+  "name": "get-pending-publish-talents-api",
+  "version": "1.0.0",
+  "description": "API to fetch talents pending for video publication.",
+  "main": "getPendingPublishTalents.js",
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  }
+}

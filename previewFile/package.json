@@ -1,0 +1,10 @@
+{
+  "name": "previewfile-pdf",
+  "version": "3.0.0",
+  "description": "A robust proxy for previewing PDF files.",
+  "main": "previewfile.js",
+  "dependencies": {
+    "@volcengine/tos-sdk": "^2.6.0"
+  }
+}
+

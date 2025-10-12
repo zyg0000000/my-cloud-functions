@@ -1,0 +1,10 @@
+{
+  "name": "get-projects-function",
+  "version": "1.0.0",
+  "description": "Cloud function to get project list with smart file preview.",
+  "main": "getprojects.js",
+  "dependencies": {
+    "mongodb": "^4.1.0",
+    "@volcengine/tos-sdk": "^2.6.0"
+  }
+}

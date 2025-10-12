@@ -1,0 +1,9 @@
+{
+  "name": "add-collaborator",
+  "version": "3.1.0",
+  "description": "云函数：为指定项目新增一条合作记录。",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}

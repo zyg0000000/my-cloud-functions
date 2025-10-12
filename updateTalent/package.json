@@ -1,0 +1,9 @@
+{
+  "name": "update-talent",
+  "version": "2.1.0",
+  "description": "云函数：更新指定达人的基础信息。",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}

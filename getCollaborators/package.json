@@ -1,0 +1,9 @@
+{
+  "name": "get-collaborations",
+  "version": "2.0.0",
+  "description": "云函数：获取合作记录并完成后端财务计算。",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}

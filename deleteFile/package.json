@@ -1,0 +1,9 @@
+{
+  "name": "deletefile-function",
+  "version": "1.0.0",
+  "description": "Cloud function to delete a file from TOS and its reference from the database.",
+  "main": "index.js",
+  "dependencies": {
+    "@volcengine/tos-sdk": "^2.6.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "check-talent-data-diagnostic",
+  "version": "1.0.0",
+  "description": "A diagnostic tool to fetch raw document from the talents collection.",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  }
+}

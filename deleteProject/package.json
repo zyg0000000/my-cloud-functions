@@ -1,0 +1,9 @@
+{
+  "name": "kol-delete-project-function",
+  "version": "1.0.0",
+  "description": "用于删除一个指定的项目及其所有关联数据。",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}

@@ -1,0 +1,9 @@
+{
+  "name": "export-all-talents",
+  "version": "1.0.0",
+  "description": "Exports basic information for all talents.",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  }
+}

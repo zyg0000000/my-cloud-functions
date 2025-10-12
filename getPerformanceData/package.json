@@ -1,0 +1,9 @@
+{
+  "name": "getperformancedata",
+  "version": "1.0.0",
+  "description": "High-performance API for the performance data page.",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  }
+}

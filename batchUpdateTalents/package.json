@@ -1,0 +1,11 @@
+{
+  "name": "kol-batch-update-talents",
+  "version": "1.0.0",
+  "description": "Cloud function to perform high-performance, criteria-based batch updates.",
+  "main": "index.js",
+  "author": "Your Engineering Team",
+  "license": "ISC",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}

@@ -1,0 +1,14 @@
+{
+  "name": "get-talents-search-function",
+  "version": "1.0.0",
+  "description": "Cloud function to search, filter, and paginate talents from MongoDB.",
+  "main": "getTalentsSearch.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  }
+}

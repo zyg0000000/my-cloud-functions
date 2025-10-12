@@ -1,0 +1,10 @@
+{
+  "name": "update-project",
+  "version": "1.1.0",
+  "description": "云函数：更新指定项目的基础信息。",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}
+

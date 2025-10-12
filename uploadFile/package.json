@@ -1,0 +1,9 @@
+{
+  "name": "kol-upload-file-function",
+  "version": "1.3.0",
+  "description": "统一文件上传云函数，用于将文件上传至TOS。",
+  "main": "index.js",
+  "dependencies": {
+    "@volcengine/tos-sdk": "2.5.2"
+  }
+}

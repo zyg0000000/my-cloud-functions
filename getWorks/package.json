@@ -1,0 +1,10 @@
+{
+  "name": "get-works",
+  "version": "1.0.0",
+  "description": "云函数：获取作品记录，支持多种筛选方式。",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  }
+}
+

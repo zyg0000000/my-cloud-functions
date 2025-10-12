@@ -1,0 +1,9 @@
+{
+  "name": "get-work-stats-function",
+  "version": "1.0.0",
+  "description": "API function to get aggregated statistics for works.",
+  "main": "getWorkStats.js",
+  "dependencies": {
+    "mongodb": "^4.1.0"
+  }
+}
