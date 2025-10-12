@@ -1,0 +1,9 @@
+{
+  "name": "generated-sheets-manager",
+  "version": "1.0.0",
+  "description": "处理“历史生成记录”的增删改查及数据迁移",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^4.10.0"
+  }
+}
