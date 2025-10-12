@@ -1,0 +1,16 @@
+{
+  "name": "kol-sync-from-feishu-function",
+  "version": "2.0.0",
+  "description": "云函数：[重大升级] 支持多集合数据映射，并将结果同步到飞书电子表格。",
+  "main": "syncFromFeishu.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "dependencies": {
+    "axios": "^1.7.2",
+    "mongodb": "^6.8.0",
+    "form-data": "^4.0.0"
+  },
+  "author": "Gemini",
+  "license": "ISC"
+}
