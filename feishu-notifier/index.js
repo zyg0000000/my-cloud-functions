@@ -1,7 +1,8 @@
 /**
  * @file feishu-notifier/index.js
- * @version 2.0.0 (Bot App API Version)
+ * @version 2.1.0 (Configurable URL)
  * @description
+ * - [架构优化] 将“前往处理”按钮的URL从硬编码改为通过环境变量 `TASK_CENTER_URL` 进行配置，增强了灵活性。
  * - [核心架构升级] 彻底重构了消息发送方式。
  * - [移除] 不再使用自定义机器人的 Webhook URL。
  * - [新增] 改为使用飞书官方的 IM API (`/im/v1/messages`) 来发送消息。
@@ -14,8 +15,9 @@ const axios = require('axios');
 // --- 从环境变量中获取配置 ---
 const APP_ID = process.env.FEISHU_APP_ID;
 const APP_SECRET = process.env.FEISHU_APP_SECRET;
-// [新增] 目标群聊的ID
 const CHAT_ID = process.env.FEISHU_CHAT_ID;
+// [新增] 从环境变量获取任务中心URL，并提供一个默认的飞书主页作为后备
+const TASK_CENTER_URL = process.env.TASK_CENTER_URL || 'https://www.feishu.cn/base/home';
 
 // --- 模块级缓存，用于存储 access_token ---
 let tenantAccessToken = null;
@@ -71,6 +73,11 @@ exports.handler = async (event, context) => {
 
     if (event.httpMethod === 'OPTIONS') {
         return { statusCode: 204, headers };
+    }
+    
+    // [新增] 启动时检查并提示URL配置
+    if (TASK_CENTER_URL === 'https://www.feishu.cn/base/home') {
+        console.warn("提醒：环境变量 TASK_CENTER_URL 未配置，'前往处理'按钮将跳转至飞书主页。");
     }
 
     try {
@@ -149,8 +156,7 @@ exports.handler = async (event, context) => {
                             "content": "前往处理"
                         },
                         "type": "default",
-                        // 请将此URL替换为您的产品任务中心的实际链接
-                        "url": "https://www.feishu.cn/base/home" 
+                        "url": TASK_CENTER_URL // [核心修改] 使用配置的URL
                     }]
                 }
             ]
