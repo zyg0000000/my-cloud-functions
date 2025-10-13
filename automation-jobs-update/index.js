@@ -1,9 +1,9 @@
 /**
  * @file Cloud Function: automation-jobs-update
- * @version 2.2 (POST for Delete)
+ * @version 2.3 (POST for Update & Delete)
  * @description 接收前端请求，用于更新或安全地删除一个 Job。
- * - [核心改造] 新增支持 POST 方法来执行删除操作，以绕过环境中 DELETE 方法可能存在的 CORS 问题。
- * - [兼容性] 同时保留了对 DELETE 和 PUT 方法的处理逻辑。
+ * - [核心改造] 增强了POST方法，使其可以同时处理“更新状态”和“删除”两种操作，以解决环境中PUT/DELETE方法的潜在问题。
+ * - [逻辑] 当POST请求体包含 'status' 字段时，执行更新操作；否则，执行删除操作。
  */
 const { MongoClient, ObjectId } = require('mongodb');
 
@@ -32,7 +32,6 @@ function createResponse(statusCode, body) {
         headers: {
             'Content-Type': 'application/json',
             'Access-Control-Allow-Origin': '*',
-            // 确保 POST, PUT, DELETE 都在允许列表中
             'Access-Control-Allow-Methods': 'POST, PUT, DELETE, OPTIONS',
             'Access-Control-Allow-Headers': 'Content-Type',
         },
@@ -45,7 +44,8 @@ async function safeDeleteJob(jobId, db) {
     const tasksCollection = db.collection(TASKS_COLLECTION);
     const jobsCollection = db.collection(JOBS_COLLECTION);
 
-    const associatedTasksCount = await tasksCollection.countDocuments({ jobId });
+    // 检查是否有关联的子任务，如果有则禁止删除
+    const associatedTasksCount = await tasksCollection.countDocuments({ jobId: new ObjectId(jobId) });
     if (associatedTasksCount > 0) {
         return createResponse(409, { // 409 Conflict
             success: false, 
@@ -94,8 +94,25 @@ exports.handler = async (event, context) => {
                 return createResponse(200, { success: true, message: 'Job updated successfully.' });
             }
 
-            // [核心改造] 使用 POST 方法执行删除
-            case 'POST':
+            // [核心改造] 使用 POST 方法同时支持更新和删除
+            case 'POST': {
+                const body = JSON.parse(event.body || '{}');
+                // 如果请求体中包含 status 字段，则认为是更新操作
+                if (body.status) {
+                    const jobsCollection = db.collection(JOBS_COLLECTION);
+                    const updateData = { status: body.status, updatedAt: new Date() };
+                    const result = await jobsCollection.updateOne({ _id: jobId }, { $set: updateData });
+
+                    if (result.matchedCount === 0) {
+                        return createResponse(404, { success: false, message: 'Job not found.' });
+                    }
+                    return createResponse(200, { success: true, message: 'Job updated successfully.' });
+                } else {
+                    // 否则，认为是删除操作
+                    return await safeDeleteJob(jobId, db);
+                }
+            }
+            
             case 'DELETE': {
                 return await safeDeleteJob(jobId, db);
             }
