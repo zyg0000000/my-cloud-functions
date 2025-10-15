@@ -1,9 +1,8 @@
 /**
  * @file handleProjectReport/index.js
- * @description [V3.3-优化方案最终版] 移除 works 记录的异常创建路径。
- * - [核心优化] 移除了 `saveDailyStats` 函数中 `bulkWrite` 操作的 `upsert: true` 选项。
- * - [数据完整性] 这是优化方案的第二步，也是最后一步。此修改彻底杜绝了在日报数据录入环节意外创建不完整“幽灵”`works`记录的可能性。
- * - [健壮性] 现在，只有通过 `updateCollaborator` 函数（在视频首次确认发布时）才能创建 `works` 记录，确保了所有记录在创建时都包含完整的关键信息。
+ * @description [V3.4-优化版] 增强数据录入页面的信息维度。
+ * - [核心优化] `getVideosForEntry` 函数现在会从 `collaborations` 集合中额外查询并返回 `taskId` 和 `videoId` 字段。
+ * - [目的] 为前端“录入数据”列表提供更丰富的上下文信息，包括任务ID和可点击的视频链接。
  */
 const { MongoClient } = require('mongodb');
 
@@ -142,17 +141,25 @@ async function getReportData(db, projectId, date) {
     return { overview, details, missingDataVideos };
 }
 
+/**
+ * API 2: 获取待录入数据的视频列表
+ * [V3.4 优化] - 现在会额外返回 taskId 和 videoId
+ */
 async function getVideosForEntry(db, projectId, date) {
     const collaborations = await db.collection('collaborations').find({ projectId, status: { $in: ["客户已定档", "视频已发布"] } }).toArray();
     if (collaborations.length === 0) return [];
+    
     const talentIds = collaborations.map(c => c.talentId);
     const collabIds = collaborations.map(c => c.id);
+
     const [talents, works] = await Promise.all([
         db.collection('talents').find({ id: { $in: talentIds } }).toArray(),
         db.collection('works').find({ collaborationId: { $in: collabIds } }).toArray()
     ]);
+
     const talentMap = new Map(talents.map(t => [t.id, t.nickname]));
     const workMap = new Map(works.map(w => [w.collaborationId, w]));
+
     return collaborations.map(collab => {
         const work = workMap.get(collab.id);
         const dailyStat = work?.dailyStats?.find(stat => stat.date === date);
@@ -160,10 +167,14 @@ async function getVideosForEntry(db, projectId, date) {
             collaborationId: collab.id,
             talentName: talentMap.get(collab.talentId) || '未知达人',
             publishDate: collab.publishDate,
-            totalViews: dailyStat?.totalViews || null
+            totalViews: dailyStat?.totalViews || null,
+            // [新增字段]
+            taskId: collab.taskId || null,
+            videoId: collab.videoId || null
         };
     });
 }
+
 
 async function saveDailyStats(db, projectId, date, data) {
     const project = await db.collection('projects').findOne({ id: projectId });
@@ -186,7 +197,11 @@ async function saveDailyStats(db, projectId, date, data) {
 
     const bulkOps = data.map(item => {
         const collaboration = collaborationMap.get(item.collaborationId);
-        if (!collaboration) return null;
+        // 如果找不到对应的合作记录，则跳过此条数据
+        if (!collaboration) {
+            console.warn(`[saveDailyStats] Skipped saving data for non-existent collaborationId: ${item.collaborationId}`);
+            return null;
+        }
 
         const amount = parseFloat(collaboration.amount) || 0;
         const income = amount * projectDiscount * 1.05;
@@ -213,8 +228,6 @@ async function saveDailyStats(db, projectId, date, data) {
                         }
                     }
                 }
-                // [核心优化 v3.3] 移除 upsert: true
-                // upsert: true 
             }
         };
         return [pullOp, pushOp];
@@ -262,3 +275,4 @@ exports.handler = async (event, context) => {
         return { statusCode: 500, headers, body: JSON.stringify({ success: false, message: error.message }) };
     }
 };
+
