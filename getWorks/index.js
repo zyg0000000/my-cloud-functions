@@ -1,7 +1,9 @@
 /**
  * @file getworks.js
- * @version 2.2-data-enhancement
+ * @version 2.3-data-enhancement
  * @description 获取作品列表的高性能接口，支持服务端分页、筛选、排序，并聚合了关联数据。
+ * * --- 更新日志 (v2.3) ---
+ * - [优化] 在 $project 阶段增加 publishDate 字段的直接映射，方便前端使用。
  * * --- 更新日志 (v2.2) ---
  * - [数据增强] 使用 $lookup 聚合管道，额外关联 collaborations 集合以获取 taskId。
  * - [健壮性] 确保即使关联的 collaboration 被删除，查询依然能正常返回作品数据。
@@ -116,7 +118,9 @@ exports.handler = async (event, context) => {
                 // --- Aggregated Fields ---
                 projectName: { $ifNull: [ { $arrayElemAt: ['$projectInfo.name', 0] }, 'N/A' ] },
                 talentName: { $ifNull: [ { $arrayElemAt: ['$talentInfo.nickname', 0] }, 'N/A' ] },
-                taskId: { $ifNull: [ { $arrayElemAt: ['$collaborationInfo.taskId', 0] }, 'N/A' ] }
+                taskId: { $ifNull: [ { $arrayElemAt: ['$collaborationInfo.taskId', 0] }, 'N/A' ] },
+                // --- [优化点] 新增字段映射，方便前端直接使用 ---
+                publishDate: { $ifNull: [ '$t7_publishedAt', null ] }
             }
         },
         { $sort: { [sortBy]: sortOrder } },

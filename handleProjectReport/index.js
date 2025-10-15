@@ -1,10 +1,9 @@
 /**
  * @file handleProjectReport/index.js
- * @description [V3.2-功能增强] 增加数据录入提醒功能。
- * - [功能增强] getReportData 接口现在会返回当日缺少播放数据的已发布视频列表。
- * - [逻辑修正] 将日报平均CPM修正为项目整体CPM，分母采用截至当日的累积总曝光。
- * - [逻辑修正] 严格区分“定档”与“已发布”的统计口径，确保总览KPI数据的准确性。
- * - [性能] 重构了`saveDailyStats`函数，解决了N+1查询问题，大幅提升了数据保存性能。
+ * @description [V3.3-优化方案最终版] 移除 works 记录的异常创建路径。
+ * - [核心优化] 移除了 `saveDailyStats` 函数中 `bulkWrite` 操作的 `upsert: true` 选项。
+ * - [数据完整性] 这是优化方案的第二步，也是最后一步。此修改彻底杜绝了在日报数据录入环节意外创建不完整“幽灵”`works`记录的可能性。
+ * - [健壮性] 现在，只有通过 `updateCollaborator` 函数（在视频首次确认发布时）才能创建 `works` 记录，确保了所有记录在创建时都包含完整的关键信息。
  */
 const { MongoClient } = require('mongodb');
 
@@ -49,10 +48,6 @@ function formatDate(dateObject) {
 
 // --- 内部业务逻辑函数 ---
 
-/**
- * API 1: 获取日报数据
- * [FIXED] 修正了总览数据的计算逻辑
- */
 async function getReportData(db, projectId, date) {
     const project = await db.collection('projects').findOne({ id: projectId });
     if (!project) {
@@ -60,7 +55,6 @@ async function getReportData(db, projectId, date) {
     }
     const projectDiscount = parseFloat(project.discount) || 1;
 
-    // --- 1. 定义精确的数据范围 ---
     const scheduledCollaborations = await db.collection('collaborations').find({ projectId, status: { $in: ["客户已定档", "视频已发布"] } }).toArray();
     const publishedCollaborations = scheduledCollaborations.filter(c => c.status === "视频已发布");
 
@@ -69,15 +63,13 @@ async function getReportData(db, projectId, date) {
         return { overview: { totalTalents: totalTalents, publishedVideos: 0, totalAmount: 0, totalViews: 0, averageCPM: 0 }, details: {}, missingDataVideos: [] };
     }
 
-    // --- 2. 获取所需的数据 ---
     const collaborationIds = publishedCollaborations.map(c => c.id);
     const works = await db.collection('works').find({ collaborationId: { $in: collaborationIds } }).toArray();
-    const allTalentIds = scheduledCollaborations.map(c => c.talentId); // 使用更广的范围获取达人信息
+    const allTalentIds = scheduledCollaborations.map(c => c.talentId);
     const talents = await db.collection('talents').find({ id: { $in: allTalentIds } }).toArray();
 
     const talentMap = new Map(talents.map(t => [t.id, t]));
     
-    // --- 3. 计算日报详情, 累积总曝光, 和缺失数据列表 ---
     const dateStr = date ? formatDate(createUTCDate(date)) : formatDate(new Date());
     const yesterdayDate = createUTCDate(dateStr);
     yesterdayDate.setUTCDate(yesterdayDate.getUTCDate() - 1);
@@ -86,7 +78,7 @@ async function getReportData(db, projectId, date) {
     let reportVideos = [];
     let overallTotalViews = 0;
     const worksById = new Map(works.map(w => [w.collaborationId, w]));
-    const videosWithDataTodayIds = new Set(); // 存储当天有数据的视频ID
+    const videosWithDataTodayIds = new Set();
 
     for (const collab of publishedCollaborations) {
         const work = worksById.get(collab.id);
@@ -100,7 +92,7 @@ async function getReportData(db, projectId, date) {
 
             const dayStat = work.dailyStats.find(s => s.date === dateStr);
             if (dayStat) {
-                videosWithDataTodayIds.add(collab.id); // 记录ID
+                videosWithDataTodayIds.add(collab.id);
                 const yesterdayStat = work.dailyStats.find(s => s.date === yesterdayStr);
                 const talent = talentMap.get(collab.talentId);
                 reportVideos.push({
@@ -116,7 +108,6 @@ async function getReportData(db, projectId, date) {
         }
     }
 
-    // [新增] 找出缺少当日数据的已发布视频
     const missingDataVideos = publishedCollaborations
         .filter(collab => !videosWithDataTodayIds.has(collab.id))
         .map(collab => ({
@@ -132,7 +123,6 @@ async function getReportData(db, projectId, date) {
         worstVideos: reportVideos.filter(v => v.cpm >= 100)
     };
     
-    // --- 4. 计算总览数据 ---
     const totalTalents = new Set(scheduledCollaborations.map(c => c.talentId)).size;
     const publishedVideosCount = publishedCollaborations.length;
     const totalAmount = publishedCollaborations.reduce((sum, c) => {
@@ -152,9 +142,6 @@ async function getReportData(db, projectId, date) {
     return { overview, details, missingDataVideos };
 }
 
-/**
- * API 2: 获取待录入数据的视频列表
- */
 async function getVideosForEntry(db, projectId, date) {
     const collaborations = await db.collection('collaborations').find({ projectId, status: { $in: ["客户已定档", "视频已发布"] } }).toArray();
     if (collaborations.length === 0) return [];
@@ -178,10 +165,6 @@ async function getVideosForEntry(db, projectId, date) {
     });
 }
 
-/**
- * API 3: 保存每日录入的数据
- * [PERF] 修复了 N+1 查询问题
- */
 async function saveDailyStats(db, projectId, date, data) {
     const project = await db.collection('projects').findOne({ id: projectId });
     const projectDiscount = project ? parseFloat(project.discount) : 1;
@@ -229,8 +212,9 @@ async function saveDailyStats(db, projectId, date, data) {
                             $sort: { date: 1 }
                         }
                     }
-                },
-                upsert: true
+                }
+                // [核心优化 v3.3] 移除 upsert: true
+                // upsert: true 
             }
         };
         return [pullOp, pushOp];
@@ -243,9 +227,6 @@ async function saveDailyStats(db, projectId, date, data) {
     return { message: '数据保存成功' };
 }
 
-/**
- * API 4: 保存后续解决方案
- */
 async function saveReportSolution(db, { collaborationId, date, solution }) {
     const dateStr = formatDate(createUTCDate(date));
     await db.collection('works').updateOne(
@@ -281,4 +262,3 @@ exports.handler = async (event, context) => {
         return { statusCode: 500, headers, body: JSON.stringify({ success: false, message: error.message }) };
     }
 };
-
