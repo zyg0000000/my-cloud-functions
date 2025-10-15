@@ -1,21 +1,21 @@
 /**
- * [生产版 v2.0 - 支持多次合作]
+ * [优化方案 v3.0 - works 记录创建触发器]
  * 云函数：updateCollaborator
  * 描述：更新指定的一条合作记录。
- * --- v2.0 更新日志 ---
- * - [核心改造] 在允许更新的字段白名单中增加了 `plannedReleaseDate`，以支持多次合作业务模式。
- * --- v1.6 更新日志 ---
- * - [核心逻辑升级] 扩大了返点专用时间戳 (discrepancyReasonUpdatedAt) 的更新范围。
- * - 现在，任何与返点回收相关的核心字段 (实收金额、回收日期、凭证、差异原因) 发生变更，
- * - 都会自动刷新此时间戳，实现了返点业务操作与通用记录更新的彻底分离。
- * ---------------------
+ * --- v3.0 更新日志 ---
+ * - [核心架构升级] 此函数现在是 `works` 记录的唯一、权威创建入口。
+ * - [新增逻辑] 当一次合作首次被更新并包含有效的 `publishDate` 或 `videoId` 时，此函数会自动检查并创建一条与之关联的、包含所有关键ID（projectId, talentId等）的完整 `works` 记录。
+ * - [数据完整性] 此机制从根本上杜绝了因其他流程（如日报录入）被动创建不完整“幽灵”`works`记录的可能性。
+ * - [依赖] 新增了对 `works` 集合的数据库操作。
  */
 
-const { MongoClient } = require('mongodb');
+const { MongoClient, ObjectId } = require('mongodb');
 
+// --- 数据库配置 ---
 const MONGO_URI = process.env.MONGO_URI;
 const DB_NAME = process.env.MONGO_DB_NAME || 'kol_data';
 const COLLABORATIONS_COLLECTION = 'collaborations';
+const WORKS_COLLECTION = 'works'; // [新增依赖]
 
 // 白名单：所有允许前端更新的字段
 const ALLOWED_UPDATE_FIELDS = [
@@ -25,11 +25,10 @@ const ALLOWED_UPDATE_FIELDS = [
   'rebateScreenshots',
   'discrepancyReason',
   'discrepancyReasonUpdatedAt',
-  'plannedReleaseDate' // [改造步骤 3] 允许更新计划发布日期
+  'plannedReleaseDate'
 ];
 
-// ** [v1.6] 定义返点业务的核心字段 **
-// 这些字段的任何变更都会触发返点专用时间戳的更新
+// 返点业务的核心字段
 const REBATE_RELATED_FIELDS = [
     'actualRebate',
     'recoveryDate',
@@ -61,6 +60,11 @@ exports.handler = async (event, context) => {
     return { statusCode: 204, headers, body: '' };
   }
 
+  const dbClient = await connectToDatabase();
+  const db = dbClient.db(DB_NAME);
+  const collaborationsCollection = db.collection(COLLABORATIONS_COLLECTION);
+  const worksCollection = db.collection(WORKS_COLLECTION); // [新增依赖]
+
   try {
     let inputData = {};
     if (event.body) {
@@ -78,17 +82,14 @@ exports.handler = async (event, context) => {
     
     const updatePayload = { $set: {}, $unset: {} };
     let hasValidFields = false;
-    let hasRebateRelatedUpdate = false; // ** [v1.6] 标记是否有返点相关更新
+    let hasRebateRelatedUpdate = false;
 
     for (const field of ALLOWED_UPDATE_FIELDS) {
         if (Object.prototype.hasOwnProperty.call(updateFields, field)) {
             hasValidFields = true;
-            
-            // ** [v1.6] 检查是否更新了返点相关字段
             if (REBATE_RELATED_FIELDS.includes(field)) {
                 hasRebateRelatedUpdate = true;
             }
-
             if (updateFields[field] === null || updateFields[field] === '' || (Array.isArray(updateFields[field]) && updateFields[field].length === 0)) {
                 updatePayload.$unset[field] = "";
             } else {
@@ -101,9 +102,7 @@ exports.handler = async (event, context) => {
         return { statusCode: 400, headers, body: JSON.stringify({ success: false, message: '请求体中没有需要更新的有效字段。' }) };
     }
     
-    // ** [v1.6] 核心逻辑：如果本次更新包含任何返点相关字段，则刷新专用时间戳
     if (hasRebateRelatedUpdate) {
-        // 如果是要清除返点信息，则也清除时间戳
         if (updateFields.actualRebate === null) {
             updatePayload.$unset.discrepancyReasonUpdatedAt = "";
         } else {
@@ -117,7 +116,6 @@ exports.handler = async (event, context) => {
         }
     }
     
-    // 通用更新时间戳：只要有$set操作，就更新
     if (Object.keys(updatePayload.$set).length > 0) {
       updatePayload.$set.updatedAt = new Date();
     }
@@ -130,14 +128,42 @@ exports.handler = async (event, context) => {
        return { statusCode: 200, headers, body: JSON.stringify({ success: true, message: '没有字段需要更新。' }) };
     }
 
-    const dbClient = await connectToDatabase();
-    const collection = dbClient.db(DB_NAME).collection(COLLABORATIONS_COLLECTION);
-
-    const result = await collection.updateOne({ id: id }, finalUpdate);
+    const result = await collaborationsCollection.updateOne({ id: id }, finalUpdate);
 
     if (result.matchedCount === 0) {
       return { statusCode: 404, headers, body: JSON.stringify({ success: false, message: `ID为 '${id}' 的合作记录不存在。` }) };
     }
+
+    // --- [优化逻辑 v3.0] 开始：创建 works 记录 ---
+    const isVideoPublished = updateFields.publishDate || updateFields.videoId;
+    if (isVideoPublished) {
+        const collaborationRecord = await collaborationsCollection.findOne({ id: id });
+        if (collaborationRecord) {
+            const workExists = await worksCollection.findOne({ collaborationId: id });
+
+            if (!workExists) {
+                console.log(`[Work Creation] Work for collaboration ${id} does not exist. Creating now.`);
+                const newWork = {
+                    _id: new ObjectId(),
+                    id: `work_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+                    collaborationId: collaborationRecord.id,
+                    projectId: collaborationRecord.projectId,
+                    talentId: collaborationRecord.talentId,
+                    taskId: collaborationRecord.taskId || null,
+                    platformWorkId: collaborationRecord.videoId || null,
+                    publishedAt: collaborationRecord.publishDate ? new Date(collaborationRecord.publishDate) : null,
+                    sourceType: 'COLLABORATION',
+                    dailyStats: [],
+                    createdAt: new Date(),
+                    updatedAt: new Date(),
+                };
+                await worksCollection.insertOne(newWork);
+                console.log(`[Work Creation] Successfully created new work record ${newWork.id}`);
+            }
+        }
+    }
+    // --- [优化逻辑 v3.0] 结束 ---
+
 
     return {
       statusCode: 200,
