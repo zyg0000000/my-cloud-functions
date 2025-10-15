@@ -1,12 +1,13 @@
 /**
  * @file Cloud Function: automation-tasks
- * @version 4.7 - Job Sync & Recalculation
+ * @version 4.8 - Project Filtering & Pagination
  * @description Centralized task management API.
- * --- UPDATE (v4.7) ---
- * - [CRITICAL] Implemented `recalculateAndSyncJobStats`, a robust function to ensure data consistency.
- * - [FEATURE] When a task is updated (PUT) or deleted (DELETE), this function is now triggered.
- * - [LOGIC] It recalculates total, success, and failed task counts for the parent job and updates its status, ensuring the job's data is always accurate.
- * - [FIX] This architecture definitively solves data inconsistency issues when tasks are manipulated.
+ * --- UPDATE (v4.8) ---
+ * - [PERFORMANCE] Implemented server-side pagination and filtering for GET requests.
+ * - [FEATURE] The GET endpoint now accepts `projectId`, `page`, and `limit` query parameters.
+ * - [EFFICIENCY] Switched to an aggregation pipeline using `$facet` to retrieve paginated data and total count in a single database query.
+ * - [RESPONSE] The response for list retrieval now includes a `pagination` object.
+ * - [COMPATIBILITY] Retains the ability to fetch a single task by ID.
  */
 const { MongoClient, ObjectId } = require('mongodb');
 const { TosClient } = require('@volcengine/tos-sdk');
@@ -74,7 +75,6 @@ async function deleteTosFolder(taskId) {
     }
 }
 
-// --- [核心升级] 重新计算并同步父Job状态和统计数据的函数 ---
 async function recalculateAndSyncJobStats(jobId, db) {
     if (!jobId || !ObjectId.isValid(jobId)) return;
 
@@ -83,7 +83,6 @@ async function recalculateAndSyncJobStats(jobId, db) {
     const jobsCollection = db.collection(JOBS_COLLECTION);
 
     try {
-        // 使用聚合一次性计算所有统计数据
         const statsPipeline = [
             { $match: { jobId: new ObjectId(jobId) } },
             {
@@ -102,12 +101,9 @@ async function recalculateAndSyncJobStats(jobId, db) {
         const stats = results[0] || { totalTasks: 0, successTasks: 0, failedTasks: 0, pendingTasks: 0, processingTasks: 0 };
         
         let newStatus = 'processing';
-        // 如果已经没有任何待处理或处理中的任务，则标记为待审查
         if (stats.pendingTasks === 0 && stats.processingTasks === 0) {
             newStatus = 'awaiting_review';
         }
-        
-        // 如果任务总数为0（例如，所有任务都被删除了），也标记为待审查
         if (stats.totalTasks === 0) {
              newStatus = 'awaiting_review';
         }
@@ -143,6 +139,7 @@ exports.handler = async (event, context) => {
         const collection = db.collection(TASKS_COLLECTION);
         const body = event.body ? JSON.parse(event.body) : {};
         const taskId = event.queryStringParameters?.id;
+        const projectId = event.queryStringParameters?.projectId;
 
         switch (event.httpMethod) {
             case 'GET': {
@@ -154,25 +151,45 @@ exports.handler = async (event, context) => {
                     const page = parseInt(event.queryStringParameters?.page, 10) || 1;
                     const limit = parseInt(event.queryStringParameters?.limit, 10) || 20;
                     const skip = (page - 1) * limit;
-                    
-                    const tasksWithWorkflow = await collection.aggregate([
-                        { $sort: { createdAt: -1 } },
-                        { $skip: skip },
-                        { $limit: limit },
+
+                    // [核心改造] 构建筛选条件
+                    const matchStage = {};
+                    if (projectId) {
+                        matchStage.projectId = projectId;
+                    }
+
+                    // [核心改造] 使用聚合管道进行分页和关联查询
+                    const aggregationPipeline = [
+                        { $match: matchStage },
                         {
-                            $lookup: {
-                                from: WORKFLOWS_COLLECTION,
-                                let: { wfId: { $toObjectId: "$workflowId" } },
-                                pipeline: [ { $match: { $expr: { $eq: ["$_id", "$$wfId"] } } } ],
-                                as: "workflowInfo"
+                            $facet: {
+                                paginatedResults: [
+                                    { $sort: { createdAt: -1 } },
+                                    { $skip: skip },
+                                    { $limit: limit },
+                                    {
+                                        $lookup: {
+                                            from: WORKFLOWS_COLLECTION,
+                                            let: { wfId: { $toObjectId: "$workflowId" } },
+                                            pipeline: [ { $match: { $expr: { $eq: ["$_id", "$$wfId"] } } } ],
+                                            as: "workflowInfo"
+                                        }
+                                    },
+                                    { $addFields: { workflowInfo: { $arrayElemAt: ["$workflowInfo", 0] } } },
+                                    { $addFields: { workflowName: { $ifNull: ["$workflowInfo.name", "Unknown Workflow"] } } },
+                                    { $project: { workflowInfo: 0 } }
+                                ],
+                                totalCount: [
+                                    { $count: 'count' }
+                                ]
                             }
-                        },
-                        { $addFields: { workflowInfo: { $arrayElemAt: ["$workflowInfo", 0] } } },
-                        { $addFields: { workflowName: { $ifNull: ["$workflowInfo.name", "Unknown Workflow"] } } },
-                        { $project: { workflowInfo: 0 } }
-                    ]).toArray();
+                        }
+                    ];
+
+                    const results = await collection.aggregate(aggregationPipeline).toArray();
                     
-                    const total = await collection.countDocuments();
+                    const tasksWithWorkflow = results[0]?.paginatedResults || [];
+                    const total = results[0]?.totalCount[0]?.count || 0;
                     const hasNextPage = (page * limit) < total;
 
                     return createResponse(200, {
@@ -184,20 +201,35 @@ exports.handler = async (event, context) => {
             }
 
             case 'POST': {
-                const xingtuId = body.xingtuId || body.targetXingtuId;
-                const { workflowId, jobId = null } = body;
-                if (!workflowId || !xingtuId) {
-                    return createResponse(400, { success: false, message: 'workflowId and a valid Xingtu ID are required.' });
+                // [核心改造] 根据工作流定义，确定ID的键名
+                const workflowsCollection = db.collection(WORKFLOWS_COLLECTION);
+                const workflow = await workflowsCollection.findOne({_id: new ObjectId(body.workflowId)});
+                
+                if (!workflow) {
+                     return createResponse(404, { success: false, message: 'Workflow not found.' });
+                }
+
+                const requiredInputKey = workflow.requiredInput?.key || 'xingtuId'; // 默认为 xingtuId 以兼容旧版
+                const dynamicId = body[requiredInputKey];
+
+                if (!body.workflowId || !dynamicId) {
+                    return createResponse(400, { success: false, message: `workflowId and '${requiredInputKey}' are required.` });
                 }
                 const newTask = {
-                    workflowId, 
-                    jobId: jobId ? new ObjectId(jobId) : null, // 确保jobId存为ObjectId
-                    xingtuId,
+                    workflowId: body.workflowId, 
+                    jobId: body.jobId ? new ObjectId(body.jobId) : null,
+                    projectId: body.projectId || null, // [新增] 保存 projectId
+                    [requiredInputKey]: dynamicId, // 使用动态键
                     status: 'pending',
                     createdAt: new Date(),
                     updatedAt: new Date(),
                     result: null, errorMessage: null,
+                    metadata: body.metadata || {} // 保存元数据
                 };
+                
+                // 为了查询方便，统一将动态ID也存入一个固定字段
+                newTask.targetId = dynamicId;
+
                 const result = await collection.insertOne(newTask);
                 const createdTask = await collection.findOne({ _id: result.insertedId });
                 return createResponse(201, { success: true, data: createdTask });
@@ -263,4 +295,3 @@ exports.handler = async (event, context) => {
         return createResponse(500, { success: false, message: 'An internal server error occurred.', error: error.message });
     }
 };
-
