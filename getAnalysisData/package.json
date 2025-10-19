@@ -1,0 +1,11 @@
+{
+  "name": "get-analysis-data",
+  "version": "1.1.0",
+  "description": "Cloud function to fetch aggregated data for the project analysis dashboard.",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  },
+  "author": "",
+  "license": "ISC"
+}
