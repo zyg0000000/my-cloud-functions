@@ -1,8 +1,9 @@
 /**
  * @file handleProjectReport/index.js
- * @description [V3.4-优化版] 增强数据录入页面的信息维度。
- * - [核心优化] `getVideosForEntry` 函数现在会从 `collaborations` 集合中额外查询并返回 `taskId` 和 `videoId` 字段。
- * - [目的] 为前端“录入数据”列表提供更丰富的上下文信息，包括任务ID和可点击的视频链接。
+ * @version 3.5 - Metric Calculation Fix
+ * @description [V3.5-修正版] 修复了“定档内容数量”的计算逻辑，确保其反映合作总数而非唯一达人数。
+ * - [核心修正] 移除了对 `talentId` 的去重逻辑 (`new Set(...)`)。
+ * - [逻辑统一] 现在 `totalTalents` 变量（将用于前端的“定档内容数量”）的值被统一设置为符合条件的合作记录数组长度。
  */
 const { MongoClient } = require('mongodb');
 
@@ -57,8 +58,11 @@ async function getReportData(db, projectId, date) {
     const scheduledCollaborations = await db.collection('collaborations').find({ projectId, status: { $in: ["客户已定档", "视频已发布"] } }).toArray();
     const publishedCollaborations = scheduledCollaborations.filter(c => c.status === "视频已发布");
 
+    // [核心修改] 直接将 totalTalents 设置为合作记录的总数
+    const totalTalents = scheduledCollaborations.length;
+
     if (publishedCollaborations.length === 0) {
-        const totalTalents = new Set(scheduledCollaborations.map(c => c.talentId)).size;
+        // 当没有已发布视频时，也使用正确的 totalTalents 计数
         return { overview: { totalTalents: totalTalents, publishedVideos: 0, totalAmount: 0, totalViews: 0, averageCPM: 0 }, details: {}, missingDataVideos: [] };
     }
 
@@ -122,7 +126,8 @@ async function getReportData(db, projectId, date) {
         worstVideos: reportVideos.filter(v => v.cpm >= 100)
     };
     
-    const totalTalents = new Set(scheduledCollaborations.map(c => c.talentId)).size;
+    // [核心修改] 移除了此处错误的去重计算逻辑
+    // const totalTalents = new Set(scheduledCollaborations.map(c => c.talentId)).size; // <- 已删除
     const publishedVideosCount = publishedCollaborations.length;
     const totalAmount = publishedCollaborations.reduce((sum, c) => {
         const amount = parseFloat(c.amount) || 0;
@@ -131,11 +136,11 @@ async function getReportData(db, projectId, date) {
     const totalViewsToday = reportVideos.reduce((sum, v) => sum + (v.totalViews || 0), 0);
 
     const overview = {
-        totalTalents: totalTalents,
+        totalTalents: totalTalents, // <- 现在这个值是正确的合作总数
         publishedVideos: publishedVideosCount,
         totalAmount: totalAmount,
         totalViews: totalViewsToday,
-        averageCPM: totalAmount > 0 && overallTotalViews > 0 ? (totalAmount / overallTotalViews) * 1000 : 0
+        averageCPM: totalAmount > 0 && overallTotalViews > 0 ? (totalAmount / totalAmount) * 1000 : 0
     };
 
     return { overview, details, missingDataVideos };
@@ -275,4 +280,3 @@ exports.handler = async (event, context) => {
         return { statusCode: 500, headers, body: JSON.stringify({ success: false, message: error.message }) };
     }
 };
-
