@@ -1,13 +1,14 @@
 /**
  * @file getcollaborators.js
- * @version 6.0-multi-collab
- * @description [业务升级] 支持达人多次合作模式。
- * * --- 更新日志 (v6.0) ---
- * - [核心改造] 在 finalProjection 中新增了 `plannedReleaseDate: 1`，确保接口会返回计划发布日期，以支持前端展示多次合作。
- * * --- v5.0 ---
- * - [核心解耦] 在 finalProjection 中新增了 `talentSource: 1`，确保接口会返回在合作创建时快照的达人来源字段。
- * * --- v4.3 ---
- * - [核心修复] 将 talentInfo.level 的数据源从 level 修正为 talentTier。
+ * @version 6.1-status-filtering
+ * @description [架构升级] 增加按合作状态筛选的功能，同时保持向后兼容。
+ * * --- 更新日志 (v6.1) ---
+ * - [核心功能] 新增了对 `statuses` 查询参数的支持。前端可以传递一个以逗号分隔的状态列表 (如: "客户已定档,视频已发布")。
+ * - [动态查询] 如果 `statuses` 参数存在，函数会在数据库查询的 `$match` 阶段动态加入 `$in` 过滤器。
+ * - [向后兼容] 如果不传递 `statuses` 参数，函数的行为与之前完全相同，不会对结果进行任何状态过滤，确保了旧页面的调用不受影响。
+ * - [代码优化] 重构了查询参数解析和聚合管道构建的逻辑，使其更加清晰和可扩展。
+ * * --- 历史更新 (v6.0) ---
+ * - [业务升级] 支持达人多次合作模式，返回 `plannedReleaseDate` 字段。
  */
 
 const { MongoClient } = require('mongodb');
@@ -52,7 +53,8 @@ exports.handler = async (event, context) => {
         page = '1',
         limit = '10',
         sortBy = 'createdAt',
-        order = 'desc'
+        order = 'desc',
+        statuses // [v6.1 新增] 接收 statuses 参数
     } = queryParams;
 
     const pageNum = parseInt(page, 10);
@@ -78,23 +80,43 @@ exports.handler = async (event, context) => {
     const db = dbClient.db(DB_NAME);
     const collabsCollection = db.collection(COLLABS_COLLECTION);
 
-    let query = {};
-    if (projectId) query.projectId = projectId;
-    if (collaborationId) query.id = collaborationId;
-
     if (view === 'simple') {
+      let simpleQuery = {};
+      if (projectId) simpleQuery.projectId = projectId;
+      if (collaborationId) simpleQuery.id = collaborationId;
       const simpleProjection = { _id: 0, id: 1, talentId: 1, status: 1, projectId: 1 };
-      const simpleData = await collabsCollection.find(query, { projection: simpleProjection }).toArray();
+      const simpleData = await collabsCollection.find(simpleQuery, { projection: simpleProjection }).toArray();
       return {
         statusCode: 200, headers,
         body: JSON.stringify({ success: true, data: simpleData })
       };
     }
     
-    const aggregationPipeline = [];
-    if (hasRequiredFilter) {
-      aggregationPipeline.push({ $match: query });
+    // --- [v6.1 核心修改] ---
+    // 动态构建聚合管道的 $match 阶段
+    const matchStage = {};
+    if (projectId) {
+        matchStage.projectId = projectId;
     }
+    if (collaborationId) {
+        matchStage.id = collaborationId;
+    }
+    // 如果 statuses 参数存在，则解析并添加到查询条件中
+    if (statuses) {
+        const statusArray = statuses.split(',').map(s => s.trim()).filter(s => s);
+        if (statusArray.length > 0) {
+            matchStage.status = { $in: statusArray };
+        }
+    }
+    // --- 修改结束 ---
+
+    const aggregationPipeline = [];
+    // 只有当 matchStage 包含至少一个条件时，才将其推入管道
+    if (Object.keys(matchStage).length > 0) {
+        aggregationPipeline.push({ $match: matchStage });
+    }
+    
+    // 后续的聚合管道阶段保持不变
     aggregationPipeline.push(
       { $lookup: { from: PROJECTS_COLLECTION, localField: 'projectId', foreignField: 'id', as: 'projectInfo' } },
       { $lookup: { from: TALENTS_COLLECTION, localField: 'talentId', foreignField: 'id', as: 'talentInfo' } },
@@ -144,7 +166,6 @@ exports.handler = async (event, context) => {
       talentSource: 1,
       amount: 1, priceInfo: 1, rebate: 1, orderType: 1,
       status: 1, orderDate: 1, publishDate: 1, videoId: 1, paymentDate: 1,
-      // [改造步骤 2] 增加 plannedReleaseDate 字段到返回结果中
       plannedReleaseDate: 1,
       actualRebate: 1, recoveryDate: 1, createdAt: 1, updatedAt: 1,
       contentFile: 1, taskId: 1,
