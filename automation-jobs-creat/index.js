@@ -1,12 +1,11 @@
 /**
  * @file Cloud Function: automation-jobs-create
- * @version 1.1 - Patched field name mismatch
+ * @version 3.4 - Dynamic ID Support
  * @description 接收前端请求，创建主作业记录 (Job)，并批量生成一系列的 automation-tasks 子任务。
- * 这是“一键生成报名表”功能的核心入口。
- * --- UPDATE (v1.1) ---
- * - [FIX] Corrected `target.talentXingtuId` to `target.xingtuId`.
- * - [FIX] Corrected `target.talentNickname` to `target.nickname`.
- * This resolves the issue where these fields were saved as null in the database.
+ * --- UPDATE (v3.4) ---
+ * - [核心升级] 增加了对动态ID的支持。函数现在会检查 'workflowId' 以确定需要的目标ID类型 (如 'taskId' 或 'xingtuId')，使其能够处理多种自动化场景。
+ * - [健壮性] 增加了对工作流的查询和验证，并能跳过缺少必要ID的目标，提高了任务创建的可靠性。
+ * - [向后兼容] 在工作流未定义 requiredInput.key 时，默认使用 'xingtuId'，确保旧功能不受影响。
  */
 const { MongoClient, ObjectId } = require('mongodb');
 
@@ -15,6 +14,7 @@ const MONGO_URI = process.env.MONGO_URI;
 const DB_NAME = process.env.DB_NAME || 'kol_data';
 const JOBS_COLLECTION = 'automation-jobs';
 const TASKS_COLLECTION = 'automation-tasks';
+const WORKFLOWS_COLLECTION = 'automation-workflows'; // 新增对工作流集合的引用
 
 let cachedDb = null;
 
@@ -59,18 +59,26 @@ exports.handler = async (event, context) => {
         const db = await connectToDatabase();
         const jobsCollection = db.collection(JOBS_COLLECTION);
         const tasksCollection = db.collection(TASKS_COLLECTION);
+        const workflowsCollection = db.collection(WORKFLOWS_COLLECTION);
 
         const body = JSON.parse(event.body || '{}');
         const { projectId, workflowId, targets } = body;
 
         // 1. 输入验证
-        if (!projectId || !workflowId || !Array.isArray(targets) || targets.length === 0) {
-            return createResponse(400, { success: false, message: 'projectId, workflowId, and a non-empty targets array are required.' });
+        if (!workflowId || !Array.isArray(targets) || targets.length === 0) {
+            return createResponse(400, { success: false, message: 'workflowId and a non-empty targets array are required.' });
         }
         
+        // [核心升级] 查询工作流以确定需要的目标ID key
+        const workflow = await workflowsCollection.findOne({ _id: new ObjectId(workflowId) });
+        if (!workflow) {
+            return createResponse(404, { success: false, message: `Workflow with ID ${workflowId} not found.` });
+        }
+        const requiredInputKey = workflow.requiredInput?.key || 'xingtuId'; // 默认为 xingtuId 以保证向后兼容
+
         // 2. 创建主 Job 文档
         const newJob = {
-            projectId,
+            projectId: projectId || null, // projectId 可以为空，代表非项目关联的独立任务
             workflowId,
             status: 'processing', // 状态: processing, awaiting_review, completed, failed
             totalTasks: targets.length,
@@ -83,31 +91,37 @@ exports.handler = async (event, context) => {
         const jobId = jobInsertResult.insertedId;
 
         // 3. 准备批量创建子 Tasks
-        const tasksToCreate = targets.map(target => ({
-            jobId: jobId, // 关联到主 Job
-            projectId: projectId,
-            workflowId: workflowId,
-            // [BUGFIX] 使用前端发送的正确字段名 `xingtuId`
-            xingtuId: target.xingtuId,
-            // [核心] 存储额外信息，用于UI展示和未来追溯
-            metadata: {
-                // [BUGFIX] 使用前端发送的正确字段名 `nickname`
-                talentNickname: target.nickname,
-                collaborationId: target.collaborationId
-            },
-            status: 'pending', // 所有任务初始状态为 pending
-            createdAt: new Date(),
-            updatedAt: new Date(),
-            result: null,
-            errorMessage: null,
-        }));
+        const tasksToCreate = targets.map(target => {
+            const targetId = target[requiredInputKey];
+            if (!targetId) {
+                console.warn(`[Job Creator] Skipping target because it lacks the required ID key '${requiredInputKey}'. Target:`, target);
+                return null; // 如果目标缺少必要的ID，则跳过
+            }
+
+            return {
+                jobId: jobId,
+                projectId: projectId || null,
+                workflowId: workflowId,
+                [requiredInputKey]: targetId, // 使用动态键名
+                targetId: targetId, // 统一存储，方便未来按 targetId 查询
+                metadata: {
+                    talentNickname: target.nickname,
+                    collaborationId: target.collaborationId
+                },
+                status: 'pending',
+                createdAt: new Date(),
+                updatedAt: new Date(),
+                result: null,
+                errorMessage: null,
+            };
+        }).filter(Boolean); // 过滤掉所有为 null 的无效任务
         
         // 4. 批量插入 Tasks
         if (tasksToCreate.length > 0) {
             await tasksCollection.insertMany(tasksToCreate);
         }
 
-        console.log(`[JOB CREATED] Job ${jobId} created with ${tasksToCreate.length} tasks for project ${projectId}.`);
+        console.log(`[JOB CREATED] Job ${jobId} created with ${tasksToCreate.length} tasks for project ${projectId || 'N/A'}.`);
 
         return createResponse(201, { 
             success: true, 

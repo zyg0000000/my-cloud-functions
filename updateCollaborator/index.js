@@ -1,12 +1,11 @@
 /**
- * [优化方案 v3.0 - works 记录创建触发器]
- * 云函数：updateCollaborator
- * 描述：更新指定的一条合作记录。
- * --- v3.0 更新日志 ---
- * - [核心架构升级] 此函数现在是 `works` 记录的唯一、权威创建入口。
- * - [新增逻辑] 当一次合作首次被更新并包含有效的 `publishDate` 或 `videoId` 时，此函数会自动检查并创建一条与之关联的、包含所有关键ID（projectId, talentId等）的完整 `works` 记录。
- * - [数据完整性] 此机制从根本上杜绝了因其他流程（如日报录入）被动创建不完整“幽灵”`works`记录的可能性。
- * - [依赖] 新增了对 `works` 集合的数据库操作。
+ * @file updateCollaborator/index.js
+ * @version 4.4 - Final Data Source Fix
+ * @description [最终BUG修复] 解决了前后端数据传递方式不匹配导致的 400 错误。
+ * --- v4.4 更新日志 ---
+ * - [核心修复] 重构了ID的获取方式。函数现在从请求的 `body` 中同时解析 `id` 和其他更新字段，而不是从 URL query 中获取 `id`。
+ * - [问题解决] 此修改彻底解决了因后端无法获取 `id` 而返回 "400 Bad Request" 或 "404 Not Found" 的问题。
+ * - [兼容性] 保留了 v4.3 版本对新版 MongoDB 驱动的兼容性修复。
  */
 
 const { MongoClient, ObjectId } = require('mongodb');
@@ -15,9 +14,8 @@ const { MongoClient, ObjectId } = require('mongodb');
 const MONGO_URI = process.env.MONGO_URI;
 const DB_NAME = process.env.MONGO_DB_NAME || 'kol_data';
 const COLLABORATIONS_COLLECTION = 'collaborations';
-const WORKS_COLLECTION = 'works'; // [新增依赖]
+const WORKS_COLLECTION = 'works';
 
-// 白名单：所有允许前端更新的字段
 const ALLOWED_UPDATE_FIELDS = [
   'amount', 'priceInfo', 'rebate', 'orderType', 'status',
   'orderDate', 'publishDate', 'videoId', 'paymentDate',
@@ -28,7 +26,6 @@ const ALLOWED_UPDATE_FIELDS = [
   'plannedReleaseDate'
 ];
 
-// 返点业务的核心字段
 const REBATE_RELATED_FIELDS = [
     'actualRebate',
     'recoveryDate',
@@ -52,29 +49,27 @@ exports.handler = async (event, context) => {
   const headers = {
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Headers': 'Content-Type',
-    'Access-Control-Allow-Methods': 'PUT, OPTIONS',
+    'Access-Control-Allow-Methods': 'POST, PUT, OPTIONS',
     'Content-Type': 'application/json'
   };
 
   if (event.httpMethod === 'OPTIONS') {
     return { statusCode: 204, headers, body: '' };
   }
+  
+  // 保持对 PUT 和 POST 的兼容
+  if (event.httpMethod !== 'POST' && event.httpMethod !== 'PUT') {
+      return { statusCode: 405, headers, body: JSON.stringify({ success: false, message: 'Method Not Allowed' }) };
+  }
 
   const dbClient = await connectToDatabase();
   const db = dbClient.db(DB_NAME);
   const collaborationsCollection = db.collection(COLLABORATIONS_COLLECTION);
-  const worksCollection = db.collection(WORKS_COLLECTION); // [新增依赖]
+  const worksCollection = db.collection(WORKS_COLLECTION);
 
   try {
-    let inputData = {};
-    if (event.body) {
-        try { inputData = JSON.parse(event.body); } catch(e) { /* ignore */ }
-    }
-    if (Object.keys(inputData).length === 0 && event.queryStringParameters) {
-        inputData = event.queryStringParameters;
-    }
-
-    const { id, ...updateFields } = inputData;
+    // [核心修复] 从 body 中同时解构 id 和其他更新字段
+    const { id, ...updateFields } = JSON.parse(event.body || '{}');
 
     if (!id) {
       return { statusCode: 400, headers, body: JSON.stringify({ success: false, message: '请求体中缺少合作记录ID (id)。' }) };
@@ -128,42 +123,53 @@ exports.handler = async (event, context) => {
        return { statusCode: 200, headers, body: JSON.stringify({ success: true, message: '没有字段需要更新。' }) };
     }
 
-    const result = await collaborationsCollection.updateOne({ id: id }, finalUpdate);
+    const updatedCollaboration = await collaborationsCollection.findOneAndUpdate(
+        { id: id },
+        finalUpdate,
+        { returnDocument: 'after' }
+    );
 
-    if (result.matchedCount === 0) {
+    if (!updatedCollaboration) {
       return { statusCode: 404, headers, body: JSON.stringify({ success: false, message: `ID为 '${id}' 的合作记录不存在。` }) };
     }
 
-    // --- [优化逻辑 v3.0] 开始：创建 works 记录 ---
-    const isVideoPublished = updateFields.publishDate || updateFields.videoId;
-    if (isVideoPublished) {
-        const collaborationRecord = await collaborationsCollection.findOne({ id: id });
-        if (collaborationRecord) {
-            const workExists = await worksCollection.findOne({ collaborationId: id });
+    const isVideoPublished = updatedCollaboration.publishDate || updatedCollaboration.videoId;
 
-            if (!workExists) {
-                console.log(`[Work Creation] Work for collaboration ${id} does not exist. Creating now.`);
-                const newWork = {
-                    _id: new ObjectId(),
-                    id: `work_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
-                    collaborationId: collaborationRecord.id,
-                    projectId: collaborationRecord.projectId,
-                    talentId: collaborationRecord.talentId,
-                    taskId: collaborationRecord.taskId || null,
-                    platformWorkId: collaborationRecord.videoId || null,
-                    publishedAt: collaborationRecord.publishDate ? new Date(collaborationRecord.publishDate) : null,
-                    sourceType: 'COLLABORATION',
-                    dailyStats: [],
-                    createdAt: new Date(),
-                    updatedAt: new Date(),
-                };
-                await worksCollection.insertOne(newWork);
-                console.log(`[Work Creation] Successfully created new work record ${newWork.id}`);
-            }
+    if (isVideoPublished) {
+        const workExists = await worksCollection.findOne({ collaborationId: id });
+
+        if (!workExists) {
+            console.log(`[Work Upsert] Work for collaboration ${id} does not exist. Creating now.`);
+            const newWork = {
+                _id: new ObjectId(),
+                id: `work_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
+                collaborationId: updatedCollaboration.id,
+                projectId: updatedCollaboration.projectId,
+                talentId: updatedCollaboration.talentId,
+                taskId: updatedCollaboration.taskId || null,
+                platformWorkId: updatedCollaboration.videoId || null,
+                publishedAt: updatedCollaboration.publishDate ? new Date(updatedCollaboration.publishDate) : null,
+                sourceType: 'COLLABORATION',
+                dailyStats: [],
+                createdAt: new Date(),
+                updatedAt: new Date(),
+            };
+            await worksCollection.insertOne(newWork);
+            console.log(`[Work Upsert] Successfully CREATED new work record ${newWork.id}`);
+        } else {
+            console.log(`[Work Upsert] Work for collaboration ${id} already exists. Updating now.`);
+            const workUpdatePayload = {
+                $set: {
+                    platformWorkId: updatedCollaboration.videoId || null,
+                    publishedAt: updatedCollaboration.publishDate ? new Date(updatedCollaboration.publishDate) : null,
+                    taskId: updatedCollaboration.taskId || null,
+                    updatedAt: new Date()
+                }
+            };
+            await worksCollection.updateOne({ collaborationId: id }, workUpdatePayload);
+            console.log(`[Work Upsert] Successfully UPDATED existing work record for collaboration ${id}.`);
         }
     }
-    // --- [优化逻辑 v3.0] 结束 ---
-
 
     return {
       statusCode: 200,
@@ -176,3 +182,4 @@ exports.handler = async (event, context) => {
     return { statusCode: 500, headers, body: JSON.stringify({ success: false, message: '服务器内部错误', error: error.message }) };
   }
 };
+
