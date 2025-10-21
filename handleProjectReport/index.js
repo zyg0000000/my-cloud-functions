@@ -1,9 +1,9 @@
 /**
  * @file handleProjectReport/index.js
- * @version 3.5 - Metric Calculation Fix
- * @description [V3.5-修正版] 修复了“定档内容数量”的计算逻辑，确保其反映合作总数而非唯一达人数。
- * - [核心修正] 移除了对 `talentId` 的去重逻辑 (`new Set(...)`)。
- * - [逻辑统一] 现在 `totalTalents` 变量（将用于前端的“定档内容数量”）的值被统一设置为符合条件的合作记录数组长度。
+ * @version 3.6 - CPM Calculation Fix
+ * @description [V3.6-修正版] 修复了 averageCPM 计算公式错误导致其值恒为1000的严重BUG。
+ * - [核心修正] 将 averageCPM 的计算公式从 (totalAmount / totalAmount) 修正为 (totalAmount / overallTotalViews)。
+ * - [逻辑统一] 保持了 v3.5 版本对“定档内容数量”的正确计算逻辑。
  */
 const { MongoClient } = require('mongodb');
 
@@ -126,8 +126,6 @@ async function getReportData(db, projectId, date) {
         worstVideos: reportVideos.filter(v => v.cpm >= 100)
     };
     
-    // [核心修改] 移除了此处错误的去重计算逻辑
-    // const totalTalents = new Set(scheduledCollaborations.map(c => c.talentId)).size; // <- 已删除
     const publishedVideosCount = publishedCollaborations.length;
     const totalAmount = publishedCollaborations.reduce((sum, c) => {
         const amount = parseFloat(c.amount) || 0;
@@ -136,11 +134,12 @@ async function getReportData(db, projectId, date) {
     const totalViewsToday = reportVideos.reduce((sum, v) => sum + (v.totalViews || 0), 0);
 
     const overview = {
-        totalTalents: totalTalents, // <- 现在这个值是正确的合作总数
+        totalTalents: totalTalents,
         publishedVideos: publishedVideosCount,
         totalAmount: totalAmount,
         totalViews: totalViewsToday,
-        averageCPM: totalAmount > 0 && overallTotalViews > 0 ? (totalAmount / totalAmount) * 1000 : 0
+        // [核心BUG修复] 将 averageCPM 的计算公式修正
+        averageCPM: totalAmount > 0 && overallTotalViews > 0 ? (totalAmount / overallTotalViews) * 1000 : 0
     };
 
     return { overview, details, missingDataVideos };
@@ -173,7 +172,6 @@ async function getVideosForEntry(db, projectId, date) {
             talentName: talentMap.get(collab.talentId) || '未知达人',
             publishDate: collab.publishDate,
             totalViews: dailyStat?.totalViews || null,
-            // [新增字段]
             taskId: collab.taskId || null,
             videoId: collab.videoId || null
         };
@@ -202,7 +200,6 @@ async function saveDailyStats(db, projectId, date, data) {
 
     const bulkOps = data.map(item => {
         const collaboration = collaborationMap.get(item.collaborationId);
-        // 如果找不到对应的合作记录，则跳过此条数据
         if (!collaboration) {
             console.warn(`[saveDailyStats] Skipped saving data for non-existent collaborationId: ${item.collaborationId}`);
             return null;
@@ -280,3 +277,4 @@ exports.handler = async (event, context) => {
         return { statusCode: 500, headers, body: JSON.stringify({ success: false, message: error.message }) };
     }
 };
+
