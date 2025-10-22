@@ -1,0 +1,11 @@
+{
+  "name": "export-comprehensive-data",
+  "version": "1.0.0",
+  "description": "A powerful cloud function to aggregate and export comprehensive talent data.",
+  "main": "index.js",
+  "dependencies": {
+    "mongodb": "^6.5.0"
+  },
+  "author": "AI Software Engineer",
+  "license": "ISC"
+}
