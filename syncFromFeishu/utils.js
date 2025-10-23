@@ -1,12 +1,11 @@
 /**
  * @file utils.js
- * @version 11.0 - Manual Daily Update Support
+ * @version 11.2 - Sheet Generation Fix
  * @description
- * - [核心功能] 新增了对 dataType 'manualDailyUpdate' 的处理逻辑，用于手动同步超过14天的项目日报数据。
- * - [独立逻辑] 'manualDailyUpdate' 分支不依赖全局 DATA_MAPPING，直接按固定列名读取数据，提取日期，并更新 works 集合中的 dailyStats 数组。
- * - [CPM 计算] 在更新 dailyStats 时，会根据关联的 collaboration 和 project 信息重新计算 CPM 和 CPM 变化。
+ * - [BUG 修复] 修复了 `generateAutomationSheet` 函数中一个错误的 $addFields 阶段，该阶段试图将空字符串转换为 ObjectId，导致 "Failed to parse objectId" 错误。
+ * - [日志优化] (V11.1) `manualDailyUpdate` 逻辑在跳过空行时不再打印日志。
+ * - [核心功能] (V11.0) 新增了对 dataType 'manualDailyUpdate' 的处理逻辑。
  * - [兼容性] 保留并兼容了 handleTalentImport 和 performProjectSync (用于 t7/t21) 的原有功能。
- * - [日志增强] 为手动更新逻辑添加了详细的日志记录。
  */
 const axios = require('axios');
 const { MongoClient, ObjectId } = require('mongodb');
@@ -294,7 +293,7 @@ async function getSheetHeaders(payload) {
 
 async function generateAutomationSheet(payload) {
     const { primaryCollection, mappingTemplate, taskIds, destinationFolderToken, projectName } = payload;
-    // ... (generateAutomationSheet 逻辑保持不变) ...
+    
     console.log("======== [START] generateAutomationSheet ========");
     console.log("收到的初始参数:", JSON.stringify(payload, null, 2));
 
@@ -303,7 +302,7 @@ async function generateAutomationSheet(payload) {
     }
     const token = await getTenantAccessToken();
     const db = (await getDbConnection()).db(DB_NAME);
-
+    
     console.log("\n--- [步骤 1] 复制模板表格 ---");
     const templateToken = getSpreadsheetTokenFromUrl(mappingTemplate.spreadsheetToken);
     if (!templateToken) throw new AppError('无法从模板中解析出有效的Token。', 400);
@@ -311,9 +310,9 @@ async function generateAutomationSheet(payload) {
     const copyPayload = { name: newFileName, type: 'sheet', folder_token: "" }; // Initially create in root
     console.log("--> 将在模板文件所在位置创建副本...");
     const copyResponse = await axios.post(`https://open.feishu.cn/open-apis/drive/v1/files/${templateToken}/copy`, copyPayload, { headers: { 'Authorization': `Bearer ${token}` } });
-    if (copyResponse.data.code !== 0) {
+    if (copyResponse.data.code !== 0) { 
         console.error("--> [错误] 复制文件API返回失败:", JSON.stringify(copyResponse.data, null, 2));
-        throw new AppError(`复制飞书表格失败: ${copyResponse.data.msg}`, 500);
+        throw new AppError(`复制飞书表格失败: ${copyResponse.data.msg}`, 500); 
     }
     const newFile = copyResponse.data.data.file;
     const newSpreadsheetToken = newFile.token;
@@ -329,8 +328,10 @@ async function generateAutomationSheet(payload) {
             { $match: { id: { $in: collaborationIds } } },
             { $lookup: { from: TALENTS_COLLECTION, localField: 'talentId', foreignField: 'id', as: 'talent' } }, { $unwind: { path: '$talent', preserveNullAndEmptyArrays: true } },
             { $lookup: { from: PROJECTS_COLLECTION, localField: 'projectId', foreignField: 'id', as: 'project' } }, { $unwind: { path: '$project', preserveNullAndEmptyArrays: true } },
-            // Associate the correct task back based on collaborationId
-            { $addFields: { taskObjectId: { $toObjectId: "" } } }, // Placeholder for ObjectId matching
+            
+            // [V11.2 BUG 修复] 移除了错误的 $addFields 阶段
+            // { $addFields: { taskObjectId: { $toObjectId: "" } } }, 
+
              {
                $lookup: {
                  from: AUTOMATION_TASKS_COLLECTION,
@@ -341,12 +342,12 @@ async function generateAutomationSheet(payload) {
                          { $and:
                             [
                               { $eq: ["$metadata.collaborationId", "$$collabId"] },
-                              { $in: ["$_id", objectIdTaskIds] } // Ensure we only link tasks requested
+                              { $in: ["$_id", objectIdTaskIds] } // 确保只关联本次请求的任务
                             ]
                          }
                       }
                    },
-                   { $limit: 1 } // Only need one matching task per collaboration
+                   { $limit: 1 } // 每个合作只关联一个任务
                  ],
                  as: "task"
                }
@@ -354,10 +355,10 @@ async function generateAutomationSheet(payload) {
             { $unwind: { path: '$task', preserveNullAndEmptyArrays: true } }
         ];
         results = await db.collection(COLLABORATIONS_COLLECTION).aggregate(pipeline).toArray();
-        // Add latest price logic if needed
+        // 添加 latestPrice 逻辑
         results.forEach(doc => {
             if(doc.talent && Array.isArray(doc.talent.prices) && doc.talent.prices.length > 0) {
-                 // Sort prices to find the latest confirmed or provisional
+                 // 排序价格以找到最新的
                 const sortedPrices = [...doc.talent.prices].sort((a, b) => (b.year - a.year) || (b.month - a.month));
                 const latestPriceEntry = sortedPrices.find(p => p.status === 'confirmed') || sortedPrices[0];
                 if (latestPriceEntry) {
@@ -371,11 +372,11 @@ async function generateAutomationSheet(payload) {
     console.log("\n--- [步骤 3] 写入数据行 ---");
     if (results.length > 0) {
         const dataToWrite = [], imageWriteQueue = [], START_ROW = 2;
-        // Map results to the data structure needed for formula evaluation
+        // 将 results 映射为公式引擎所需的数据结构
         const contextData = results.map(doc => ({
             talents: doc.talent,
             projects: doc.project,
-            'automation-tasks': doc.task, // Use the correct key as defined in DATA_SCHEMAS
+            'automation-tasks': doc.task, // 使用在 DATA_SCHEMAS 中定义的 key
             collaborations: doc
         }));
 
@@ -385,38 +386,39 @@ async function generateAutomationSheet(payload) {
             for (let j = 0; j < mappingTemplate.feishuSheetHeaders.length; j++) {
                 const feishuHeader = mappingTemplate.feishuSheetHeaders[j];
                 const rule = mappingTemplate.mappingRules[feishuHeader];
-                let finalValue = null; // Default to null for empty cells
+                let finalValue = null; // 默认值为 null，以便在表格中显示为空白
 
-                if (typeof rule === 'string') { // Direct Mapping
+                if (typeof rule === 'string') { // 直接映射
                     const pathParts = rule.split('.');
                     if (pathParts.length > 1) {
                         const collection = pathParts[0];
                         const trueContext = context[collection];
+                        // 递归查找值
                         finalValue = pathParts.slice(1).reduce((obj, key) => (obj && obj[key] !== undefined) ? obj[key] : null, trueContext);
                     }
-                } else if (typeof rule === 'object' && rule !== null && rule.formula) { // Formula Calculation
+                } else if (typeof rule === 'object' && rule !== null && rule.formula) { // 公式计算
                     const rawResult = evaluateFormula(rule.formula, context);
                     finalValue = rule.output ? formatOutput(rawResult, rule.output) : rawResult;
                 }
-
-                // Check if the source indicates an image and the value is a valid URL
+                
+                // 检查是否为图片字段
                 const isImageField = (typeof rule === 'string' && rule.includes('screenshots'));
                 if (isImageField && typeof finalValue === 'string' && finalValue.startsWith('http')) {
-                    rowData.push(null); // Keep cell blank for images initially
+                    rowData.push(null); // 图片单元格先保持空白
                     imageWriteQueue.push({ range: `${columnIndexToLetter(j)}${START_ROW + i}`, url: finalValue, name: `${feishuHeader}.png` });
                 } else {
-                    // Ensure N/A or actual value is pushed
+                    // 确保 N/A 或实际值被推送
                     rowData.push(finalValue === null || finalValue === undefined ? null : finalValue);
                 }
             }
             dataToWrite.push(rowData);
         }
 
-        // Get the first sheet ID for writing
+        // 获取第一个 sheetId 用于写入
         const metaInfoResponse = await axios.get(`https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/${newSpreadsheetToken}/metainfo`, { headers: { 'Authorization': `Bearer ${token}` } });
         const firstSheetId = metaInfoResponse.data.data.sheets[0].sheetId;
 
-        // Write text/numeric data
+        // 写入文本/数字数据
         if (dataToWrite.length > 0) {
             const textRange = `${firstSheetId}!A${START_ROW}:${columnIndexToLetter(dataToWrite[0].length - 1)}${START_ROW + dataToWrite.length - 1}`;
             console.log(`--> [写入文本] 目标范围: ${textRange}, 行数: ${dataToWrite.length}`);
@@ -433,31 +435,31 @@ async function generateAutomationSheet(payload) {
             }
         }
 
-        // Write images sequentially to avoid rate limiting issues
+        // 写入图片
         if (imageWriteQueue.length > 0) {
              console.log(`--> [写入图片] 准备写入 ${imageWriteQueue.length} 张图片...`);
             for (const imageJob of imageWriteQueue) {
-                const imageRange = `${firstSheetId}!${imageJob.range}:${imageJob.range}`; // Range for a single cell
+                const imageRange = `${firstSheetId}!${imageJob.range}:${imageJob.range}`; // 确保范围是单个单元格
                 await writeImageToCell(token, newSpreadsheetToken, imageRange, imageJob.url, imageJob.name);
             }
              console.log(`--> [写入图片] 图片写入完成。`);
         }
     }
-
+    
     console.log("\n--- [步骤 4] 移动文件到指定文件夹 ---");
     const parsedFolderToken = getSpreadsheetTokenFromUrl(destinationFolderToken);
     await moveFileToFolder(newSpreadsheetToken, 'sheet', parsedFolderToken, token);
 
     console.log("\n--- [步骤 5] 处理文件权限 ---");
     const ownerTransferred = await transferOwner(newSpreadsheetToken, token);
-    // Only grant edit permissions if owner transfer failed or was skipped
+    // 如果所有权转移失败或未配置，才尝试授予编辑权限
     if (!ownerTransferred) {
         await grantEditPermissions(newSpreadsheetToken, token);
     }
-
+    
     console.log("\n======== [END] generateAutomationSheet ========");
-    return {
-        message: "飞书表格已生成并成功处理！",
+    return { 
+        message: "飞书表格已生成并成功处理！", 
         sheetUrl: newFile.url,
         fileName: newFileName,
         sheetToken: newSpreadsheetToken
@@ -465,34 +467,9 @@ async function generateAutomationSheet(payload) {
 }
 
 
-// --- 业务逻辑：导入功能 (保持不变) ---
+// --- [功能补齐] 业务逻辑：导入功能 ---
 // [源自 v8.2]
-function parseFlexibleNumber(value, isPercentage = false) {
-    if (value === null || value === undefined) return 0;
-    if (typeof value === 'number') {
-        if (isPercentage && value > 1) return value / 100;
-        return value;
-    }
-    if (typeof value !== 'string') return 0;
-    let numStr = value.replace(/,/g, '').trim();
-    let num = 0;
-    if (isPercentage && numStr.includes('%')) {
-        numStr = numStr.replace(/%/g, '');
-        num = parseFloat(numStr) / 100;
-    } else {
-        if (numStr.toLowerCase().includes('w') || numStr.includes('万')) {
-            numStr = numStr.replace(/w|万/gi, '');
-            num = parseFloat(numStr) * 10000;
-        } else {
-            num = parseFloat(numStr);
-            // Handle cases where percentage might be entered as 50 instead of 0.5 or 50%
-            if (isPercentage && num > 1) {
-                num = num / 100;
-            }
-        }
-    }
-    return isNaN(num) ? 0 : num;
-}
+// (parseFlexibleNumber 已在上方定义)
 
 // [源自 v8.2]
 async function handleTalentImport(spreadsheetToken) {
@@ -557,7 +534,7 @@ async function handleTalentImport(spreadsheetToken) {
     return { data: processedData, message: `Successfully read ${processedData.length} records from Feishu Sheet.` };
 }
 
-// [源自 v8.7, 包含 v11.0 的 manualDailyUpdate 逻辑]
+// [源自 v8.7, 包含 v11.1 的 manualDailyUpdate 逻辑 + 日志修复]
 async function performProjectSync(spreadsheetToken, dataType) {
     console.log(`[导入] 开始从表格 ${spreadsheetToken} 同步项目数据 (类型: ${dataType})...`);
     const client = await getDbConnection();
@@ -595,18 +572,19 @@ async function performProjectSync(spreadsheetToken, dataType) {
 
         for (const row of dataRows) {
             const taskId = row[taskIdIndex] ? String(row[taskIdIndex]).trim() : null;
-            
-            // [V11.1 修复] 如果 taskId 为空，说明这很可能是一个空行，直接静默跳过，不再打印日志。
+            const timestampStr = row[timestampIndex];
+            const viewsStr = row[viewsIndex];
+
+            // [V11.1 日志修复] 仅当 taskId 为 null 时才静默跳过（处理表格末尾的空行）
             if (!taskId) {
+                // 静默跳过空行
                 skippedCount++;
                 continue;
             }
 
-            // [V11.1 修复] 如果 taskId 存在，但其他数据缺失，才打印警告。
-            const timestampStr = row[timestampIndex];
-            const viewsStr = row[viewsIndex];
+            // 如果 taskId 存在，但其他数据缺失，则打印警告
             if (!timestampStr || viewsStr === null || viewsStr === undefined) {
-                console.warn(`[导入 manualDailyUpdate] 跳过行 ${taskId}，缺少 timestamp 或 views: ${JSON.stringify(row)}`);
+                console.warn(`[导入 manualDailyUpdate] 跳过行，缺少 timestamp 或 views (TaskID: ${taskId}): ${JSON.stringify(row)}`);
                 skippedCount++;
                 continue;
             }
@@ -618,14 +596,14 @@ async function performProjectSync(spreadsheetToken, dataType) {
                 dateStr = new Date(timestampStr).toISOString().split('T')[0];
                 if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) throw new Error("Invalid Date Format");
             } catch (e) {
-                console.warn(`[导入 manualDailyUpdate] 跳过行，无法从 '${timestampStr}' 提取有效日期 YYYY-MM-DD: ${JSON.stringify(row)}`);
+                console.warn(`[导入 manualDailyUpdate] 跳过行，无法从 '${timestampStr}' 提取有效日期 YYYY-MM-DD (TaskID: ${taskId}): ${JSON.stringify(row)}`);
                 skippedCount++;
                 continue;
             }
 
             const totalViews = parseInt(String(viewsStr).replace(/,/g, ''), 10);
             if (isNaN(totalViews)) {
-                console.warn(`[导入 manualDailyUpdate] 跳过行 ${taskId}，无法解析播放量 '${viewsStr}': ${JSON.stringify(row)}`);
+                console.warn(`[导入 manualDailyUpdate] 跳过行，无法解析播放量 '${viewsStr}' (TaskID: ${taskId}): ${JSON.stringify(row)}`);
                 skippedCount++;
                 continue;
             }
@@ -687,7 +665,8 @@ async function performProjectSync(spreadsheetToken, dataType) {
         // 6. 执行批量写入
         if (bulkOps.length > 0) {
             const bulkResult = await worksCollection.bulkWrite(bulkOps, { ordered: false });
-            updatedCount = bulkResult.modifiedCount + bulkResult.upsertedCount; // Count updates and potential upserts
+            // 计算受影响的 *行数*，而不是操作数。每次 pull+push 影响1行。
+            updatedCount = bulkOps.length / 2; 
             console.log(`[导入 manualDailyUpdate] BulkWrite 完成. Matched: ${bulkResult.matchedCount}, Modified: ${bulkResult.modifiedCount}, Upserted: ${bulkResult.upsertedCount}`);
 
             // 7. [后处理] 计算 cpmChange (需要再次查询)
@@ -729,7 +708,7 @@ async function performProjectSync(spreadsheetToken, dataType) {
             '星图任务ID': { dbField: 'collaborationId', type: 'lookup' }, '视频ID': { dbField: 'platformWorkId', type: 'string' }, '视频实际发布时间': { dbField: 'publishedAt', type: 'date' },
             '数据最后更新时间': { dbField: 'statsUpdatedAt', type: 'date' }, '播放量': { dbField: 'totalViews', type: 'number' }, '点赞量': { dbField: 'likeCount', type: 'number' },
             '评论量': { dbField: 'commentCount', type: 'number' }, '分享量': { dbField: 'shareCount', type: 'number' }, '组件曝光量': { dbField: 'componentImpressionCount', type: 'number' },
-            '组件点击量': { dbField: 'componentClickCount', type: 'number' }, '视频完播率': { dbField: 'completionRate', type: 'percentage' }, '分频次触达人数-1次': { dbField: 'reachByFrequency.freq1', type: 'number' },
+            '组件点击量': { dbField: 'componentClickCount', type: 'number' }, '视频完播率': { dbField: 'completionRate', type: 'number' }, '分频次触达人数-1次': { dbField: 'reachByFrequency.freq1', type: 'number' },
             '分频次触达人数-2次': { dbField: 'reachByFrequency.freq2', type: 'number' }, '分频次触达人数-3次': { dbField: 'reachByFrequency.freq3', type: 'number' }, '分频次触达人数-4次': { dbField: 'reachByFrequency.freq4', type: 'number' },
             '分频次触达人数-5次': { dbField: 'reachByFrequency.freq5', type: 'number' }, '分频次触达人数-6次': { dbField: 'reachByFrequency.freq6', type: 'number' }, '分频次触达人数-7次及以上': { dbField: 'reachByFrequency.freq7plus', type: 'number' },
         };
