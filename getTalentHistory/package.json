@@ -1,9 +1,14 @@
 {
-  "name": "get-talent-history",
+  "name": "get-talent-history-function",
   "version": "1.0.0",
-  "description": "Serverless function to get a talent's collaboration history, excluding a specific project.",
+  "description": "Cloud function to get talent collaboration history",
   "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
   "dependencies": {
-    "mongodb": "^6.5.0"
-  }
+    "mongodb": "^4.1.0"
+  },
+  "author": "",
+  "license": "ISC"
 }
