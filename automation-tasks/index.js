@@ -157,6 +157,30 @@ exports.handler = async (event, context) => {
                     if (projectId) {
                         matchStage.projectId = projectId;
                     }
+                    // 新增功能：按 jobId 筛选（支持查询测试任务）
+                    if (event.queryStringParameters?.jobId !== undefined) {
+                        const jobIdParam = event.queryStringParameters.jobId;
+                        if (jobIdParam === 'null' || jobIdParam === null || jobIdParam === '') {
+                            // 查询独立任务（测试任务）
+                            matchStage.jobId = null;
+                        } else {
+                            // 查询特定 Job 的任务
+                            try {
+                                matchStage.jobId = new ObjectId(jobIdParam);
+                            } catch (error) {
+                                console.error('Invalid jobId format:', jobIdParam);
+                                return createResponse(400, {
+                                    success: false,
+                                    message: '无效的 jobId 格式'
+                                });
+                            }
+                        }
+                    }
+
+                    // 新增功能：按 workflowId 筛选（方便按工作流查询）
+                    if (event.queryStringParameters?.workflowId) {
+                        matchStage.workflowId = event.queryStringParameters.workflowId;
+                    }
 
                     // [核心改造] 使用聚合管道进行分页和关联查询
                     const aggregationPipeline = [
