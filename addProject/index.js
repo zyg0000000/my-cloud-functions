@@ -1,7 +1,10 @@
 /**
  * @file addProject.js
- * @version 1.2-benchmark-cpm
+ * @version 1.3-tracking-enabled
  * @description 接收前端发送的项目数据，创建一个新的项目文档。
+ * * --- 更新日志 (v1.3) ---
+ * - [新增字段] 新增了对 `trackingEnabled` (效果追踪开关) 字段的支持。
+ * - 在创建新项目时，会接收并存储这个配置项，默认值为 false。
  * * --- 更新日志 (v1.2) ---
  * - [核心功能] 新增了对 `benchmarkCPM` (目标CPM) 字段的支持。
  * - 在创建新项目时，会接收并存储这个关键的考核指标。
@@ -67,6 +70,8 @@ exports.handler = async (event, context) => {
       ...inputData,
       // [v1.2] Safely parse benchmarkCPM to a number
       benchmarkCPM: inputData.benchmarkCPM ? parseFloat(inputData.benchmarkCPM) : null,
+      // [v1.3] Parse trackingEnabled to boolean, default to false
+      trackingEnabled: inputData.trackingEnabled === true || inputData.trackingEnabled === 'true' ? true : false,
       status: '执行中',
       adjustments: [],
       auditLog: [],

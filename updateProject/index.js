@@ -1,10 +1,13 @@
 /**
  * @file updateProject.js
- * @version 1.3-benchmark-cpm
+ * @version 1.4-tracking-enabled
  * @description 更新指定项目的基础信息或状态。
+ * * --- 更新日志 (v1.4) ---
+ * - [新增字段] 在允许更新的字段白名单中增加了 `trackingEnabled` 字段。
+ * - 支持通过此接口开启或关闭项目的"效果追踪"功能。
  * * --- 更新日志 (v1.3) ---
  * - [核心功能] 在允许更新的字段白名单中增加了 `benchmarkCPM` 字段。
- * - 现在可以通过此接口创建或更新项目的“磨标CPM”考核指标。
+ * - 现在可以通过此接口创建或更新项目的"目标CPM"考核指标。
  */
 
 const { MongoClient } = require('mongodb');
@@ -13,11 +16,11 @@ const MONGO_URI = process.env.MONGO_URI;
 const DB_NAME = process.env.MONGO_DB_NAME || 'kol_data';
 const PROJECTS_COLLECTION = process.env.MONGO_PROJECTS_COLLECTION || 'projects';
 
-// [v1.3] Add benchmarkCPM to the list of allowed fields
+// [v1.4] Add trackingEnabled to the list of allowed fields
 const ALLOWED_UPDATE_FIELDS = [
     'name', 'qianchuanId', 'type', 'budget', 'benchmarkCPM', 'year', 'month',
     'financialYear', 'financialMonth', 'discount', 'capitalRateId',
-    'status', 'adjustments', 'projectFiles'
+    'status', 'adjustments', 'projectFiles', 'trackingEnabled'
 ];
 
 
@@ -73,7 +76,12 @@ exports.handler = async (event, context) => {
                 } else {
                     updatePayload.$unset[field] = ""; // Unset if empty or invalid
                 }
-            } else if (updateFields[field] === null || updateFields[field] === '') {
+            } 
+            // [v1.4] Ensure trackingEnabled is stored as a boolean
+            else if (field === 'trackingEnabled') {
+                updatePayload.$set[field] = updateFields[field] === true || updateFields[field] === 'true' ? true : false;
+            }
+            else if (updateFields[field] === null || updateFields[field] === '') {
                 updatePayload.$unset[field] = "";
             } else {
                 updatePayload.$set[field] = updateFields[field];
