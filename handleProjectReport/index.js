@@ -1,9 +1,11 @@
 /**
  * @file handleProjectReport/index.js
- * @version 3.6 - CPM Calculation Fix
- * @description [V3.6-修正版] 修复了 averageCPM 计算公式错误导致其值恒为1000的严重BUG。
- * - [核心修正] 将 averageCPM 的计算公式从 (totalAmount / totalAmount) 修正为 (totalAmount / overallTotalViews)。
- * - [逻辑统一] 保持了 v3.5 版本对“定档内容数量”的正确计算逻辑。
+ * @version 3.7 - Time-based Filtering Fix
+ * @description [V3.7-修正版] 修复了数据录入提醒和已发布视频统计的时间过滤问题。
+ * - [核心修正] publishedCollaborations 增加时间过滤：只统计在选择日期之前或当日发布的视频
+ * - [核心修正] missingDataVideos 增加 publishDate 字段，并过滤当日发布的视频
+ * - [逻辑统一] overview.totalViews 改用 overallTotalViews，与 averageCPM 计算保持一致
+ * - [保持不变] 定档内容数量不随日期变化，统计当前所有定档和已发布的合作
  */
 const { MongoClient } = require('mongodb');
 
@@ -56,9 +58,16 @@ async function getReportData(db, projectId, date) {
     const projectDiscount = parseFloat(project.discount) || 1;
 
     const scheduledCollaborations = await db.collection('collaborations').find({ projectId, status: { $in: ["客户已定档", "视频已发布"] } }).toArray();
-    const publishedCollaborations = scheduledCollaborations.filter(c => c.status === "视频已发布");
+    
+    // [V3.7 核心修改] 计算选择的日期字符串，用于时间过滤
+    const dateStr = date ? formatDate(createUTCDate(date)) : formatDate(new Date());
+    
+    // [V3.7 核心修改] 只统计在选择日期之前或当日发布的视频
+    const publishedCollaborations = scheduledCollaborations.filter(c => {
+        return c.status === "视频已发布" && c.publishDate && c.publishDate <= dateStr;
+    });
 
-    // [核心修改] 直接将 totalTalents 设置为合作记录的总数
+    // [保持不变] 直接将 totalTalents 设置为合作记录的总数（不随日期变化）
     const totalTalents = scheduledCollaborations.length;
 
     if (publishedCollaborations.length === 0) {
@@ -73,7 +82,6 @@ async function getReportData(db, projectId, date) {
 
     const talentMap = new Map(talents.map(t => [t.id, t]));
     
-    const dateStr = date ? formatDate(createUTCDate(date)) : formatDate(new Date());
     const yesterdayDate = createUTCDate(dateStr);
     yesterdayDate.setUTCDate(yesterdayDate.getUTCDate() - 1);
     const yesterdayStr = formatDate(yesterdayDate);
@@ -111,11 +119,14 @@ async function getReportData(db, projectId, date) {
         }
     }
 
+    // [V3.7 核心修改] 只提醒在选择日期之前发布的视频（不包括当日发布），并添加 publishDate 字段
     const missingDataVideos = publishedCollaborations
+        .filter(collab => collab.publishDate < dateStr)  // 当日发布的不提醒（次日才能录入数据）
         .filter(collab => !videosWithDataTodayIds.has(collab.id))
         .map(collab => ({
             collaborationId: collab.id,
-            talentName: talentMap.get(collab.talentId)?.nickname || '未知达人'
+            talentName: talentMap.get(collab.talentId)?.nickname || '未知达人',
+            publishDate: collab.publishDate  // [V3.7 新增] 添加 publishDate 字段供前端使用
         }));
    
     const details = {
@@ -131,14 +142,12 @@ async function getReportData(db, projectId, date) {
         const amount = parseFloat(c.amount) || 0;
         return sum + (amount * projectDiscount * 1.05);
     }, 0);
-    const totalViewsToday = reportVideos.reduce((sum, v) => sum + (v.totalViews || 0), 0);
 
     const overview = {
         totalTalents: totalTalents,
         publishedVideos: publishedVideosCount,
         totalAmount: totalAmount,
-        totalViews: totalViewsToday,
-        // [核心BUG修复] 将 averageCPM 的计算公式修正
+        totalViews: overallTotalViews,  // [V3.7 修改] 改用累计播放量，与 averageCPM 计算保持一致
         averageCPM: totalAmount > 0 && overallTotalViews > 0 ? (totalAmount / overallTotalViews) * 1000 : 0
     };
 
@@ -277,4 +286,3 @@ exports.handler = async (event, context) => {
         return { statusCode: 500, headers, body: JSON.stringify({ success: false, message: error.message }) };
     }
 };
-
