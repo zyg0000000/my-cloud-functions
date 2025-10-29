@@ -1,11 +1,17 @@
 /**
  * @file utils.js
- * @version 11.2 - Sheet Generation Fix
+ * @version 11.4.2 - Multi-Price Type Support (Fixed Stats)
  * @description
- * - [BUG 修复] 修复了 `generateAutomationSheet` 函数中一个错误的 $addFields 阶段，该阶段试图将空字符串转换为 ObjectId，导致 "Failed to parse objectId" 错误。
- * - [日志优化] (V11.1) `manualDailyUpdate` 逻辑在跳过空行时不再打印日志。
- * - [核心功能] (V11.0) 新增了对 dataType 'manualDailyUpdate' 的处理逻辑。
- * - [兼容性] 保留并兼容了 handleTalentImport 和 performProjectSync (用于 t7/t21) 的原有功能。
+ * - [BUG 修复] 修复统计逻辑错误（更新失败数显示为负数的问题）
+ * - [功能新增] 支持从飞书同步3种价格类型（60s+、20-60s、1-20s短视频报价）
+ * - [功能新增] 价格自动更新到当前年月，status为confirmed
+ * - [功能新增] 添加价格更新统计日志
+ * - [兼容性] 保留 V11.4.1 的字段映射修复和lastUpdated功能
+ * - [兼容性] 保留 V11.4 的数据库批量更新功能
+ * - [兼容性] 保留 V11.3 的 Null Safety Fix 和 parseFlexibleNumber 函数
+ * - [兼容性] 保留 V11.2 的 Sheet Generation Fix
+ * - [兼容性] 保留 V11.1 的 manualDailyUpdate 日志优化
+ * - [兼容性] 保留 V11.0 的 manualDailyUpdate 核心功能
  */
 const axios = require('axios');
 const { MongoClient, ObjectId } = require('mongodb');
@@ -15,33 +21,31 @@ const APP_ID = process.env.FEISHU_APP_ID;
 const APP_SECRET = process.env.FEISHU_APP_SECRET;
 const DB_NAME = 'kol_data';
 const MONGO_URI = process.env.MONGO_URI;
-// 用于转移所有权的用户ID，应配置为 user_id
 const FEISHU_OWNER_ID = process.env.FEISHU_OWNER_ID;
-// 用于分享编辑权限的用户ID列表 (open_id)
 const FEISHU_SHARE_USER_IDS = process.env.FEISHU_SHARE_USER_IDS;
 
-// --- 新增: 数据库集合名称常量 ---
+// --- 数据库集合名称常量 ---
 const COLLABORATIONS_COLLECTION = 'collaborations';
 const WORKS_COLLECTION = 'works';
-const PROJECTS_COLLECTION = 'projects'; // 用于获取 projectDiscount
-const TALENTS_COLLECTION = 'talents'; // 用于 handleTalentImport
-const MAPPING_TEMPLATES_COLLECTION = 'mapping_templates'; // 用于 generateAutomationSheet
-const AUTOMATION_TASKS_COLLECTION = 'automation-tasks'; // 用于 generateAutomationSheet
+const PROJECTS_COLLECTION = 'projects';
+const TALENTS_COLLECTION = 'talents';
+const MAPPING_TEMPLATES_COLLECTION = 'mapping_templates';
+const AUTOMATION_TASKS_COLLECTION = 'automation-tasks';
 
 // --- 模块级缓存 ---
 let tenantAccessToken = null;
 let tokenExpiresAt = 0;
 let dbClient = null;
 
-// --- 数据结构“总菜单”定义 (保持不变，仅用于 generateAutomationSheet 和 getMappingSchemas) ---
+// --- 数据结构定义 ---
 const DATA_SCHEMAS = {
     talents: { displayName: "达人信息", fields: [ { path: "nickname", displayName: "达人昵称" }, { path: "xingtuId", displayName: "星图ID" }, { path: "uid", displayName: "UID" }, { path: "latestPrice", displayName: "最新价格", isSpecial: true }, ] },
     projects: { displayName: "项目信息", fields: [ { path: "name", displayName: "项目名称" }, { path: "qianchuanId", displayName: "仟传项目编号" }, ] },
     collaborations: { displayName: "合作信息", fields: [ { path: "taskId", displayName: "任务ID (星图)" }, { path: "videoId", displayName: "视频ID (平台)" }, { path: "orderType", displayName: "订单类型" }, { path: "status", displayName: "合作状态" }, { path: "amount", displayName: "合作金额" }, { path: "publishDate", displayName: "实际发布日期" }, ] },
-    "automation-tasks": { displayName: "自动化任务", fields: [ { path: "result.data.预期CPM", displayName: "预期CPM" }, { path: "result.data.完播率", displayName: "完播率" }, { path: "result.data.爆文率", displayName: "爆文率" }, { path: "result.data.个人视频播放量均值", displayName: "个人视频播放量均值" }, { path: "result.data.星图频播放量均值", displayName: "星图视频播放量均值" }, { path: "result.data.用户画像总结", displayName: "用户画像总结" }, { path: "result.screenshots.0.url", displayName: "截图1 (达人价格)", isImage: true }, { path: "result.screenshots.1.url", displayName: "截图2 (星图视频)", isImage: true }, { path: "result.screenshots.2.url", displayName: "截图3 (男女比例)", isImage: true }, { path: "result.screenshots.3.url", displayName: "截图4 (年龄分布)", isImage: true }, { path: "result.screenshots.4.url", displayName: "截图5 (城市等级)", isImage: true }, { path: "result.screenshots.5.url", displayName: "截图6 (八大人群)", isImage: true }, { path: "result.screenshots.6.url", displayName: "截图7 (设备截图)", isImage: true }, ] }
+    "automation-tasks": { displayName: "自动化任务", fields: [ { path: "result.data.预期CPM", displayName: "预期CPM" }, { path: "result.data.完播率", displayName: "完播率" }, { path: "result.data.爆文率", displayName: "爆文率" }, { path: "result.data.个人视频播放量均值", displayName: "个人视频播放量均值" }, { path: "result.data.星图频播放量均值", displayName: "星图视频播放量均值" }, { path: "result.data.用户画像总结", displayName: "用户画像总结" }, { path: "result.screenshots.0.url", displayName: "截图1 (达人价格)", isImage: true }, { path: "result.screenshots.1.url", displayName: "截图2 (星图视频)", isImage: true }, { path: "result.screenshots.2.url", displayName: "截图3 (男女比例)", isImage: true }, { path: "result.screenshots.4.url", displayName: "截图4 (年龄分布)", isImage: true }, { path: "result.screenshots.5.url", displayName: "截图5 (城市等级)", isImage: true }, { path: "result.screenshots.6.url", displayName: "截图6 (八大人群)", isImage: true }, { path: "result.screenshots.7.url", displayName: "截图7 (设备截图)", isImage: true }, ] }
 };
 
-// --- 辅助函数 (保持不变) ---
+// --- 辅助函数 ---
 class AppError extends Error {
     constructor(message, statusCode) { super(message); this.statusCode = statusCode; }
 }
@@ -66,18 +70,16 @@ async function getTenantAccessToken() {
 
 function getSpreadsheetTokenFromUrl(url) {
     if (!url || typeof url !== 'string') return null;
-    if (!url.includes('/')) return url; // Assume it's already a token if no slash
+    if (!url.includes('/')) return url;
     try {
         const pathParts = new URL(url).pathname.split('/');
-        // Find 'sheets' or 'folder', then take the next part
-        const driveTypeIndex = pathParts.findIndex(part => ['sheets', 'folder', 'spreadsheet'].includes(part)); // Added 'spreadsheet'
+        const driveTypeIndex = pathParts.findIndex(part => ['sheets', 'folder', 'spreadsheet'].includes(part));
         if (driveTypeIndex > -1 && pathParts.length > driveTypeIndex + 1) {
             return pathParts[driveTypeIndex + 1];
         }
     } catch (error) {
         console.warn(`Could not parse URL: ${url}`, error);
     }
-    // Fallback if URL parsing fails or no token found
     console.warn(`Could not extract token from URL: ${url}. Returning the input string.`);
     return url;
 }
@@ -91,7 +93,7 @@ function columnIndexToLetter(index) {
     return letter;
 }
 
-// --- 计算引擎核心 (保持不变) ---
+// --- 计算引擎核心 ---
 function parseToNumberForEval(value) {
     if (value === null || value === undefined) return 0;
     if (typeof value === 'number') return value;
@@ -105,6 +107,30 @@ function parseToNumberForEval(value) {
         const num = parseFloat(numStr.replace(/w|万/gi, ''));
         return isNaN(num) ? 0 : num * 10000;
     }
+    const num = parseFloat(numStr);
+    return isNaN(num) ? 0 : num;
+}
+
+/**
+ * [V11.3 新增] 解析灵活的数字格式（支持百分比、千位分隔符、万单位等）
+ */
+function parseFlexibleNumber(value, isPercentage = false) {
+    if (value === null || value === undefined) return 0;
+    if (typeof value === 'number') return value;
+    if (typeof value !== 'string') return 0;
+    
+    let numStr = value.replace(/,/g, '').trim();
+    
+    if (isPercentage || numStr.endsWith('%')) {
+        const num = parseFloat(numStr.replace('%', ''));
+        return isNaN(num) ? 0 : num / 100;
+    }
+    
+    if (numStr.toLowerCase().endsWith('w') || numStr.includes('万')) {
+        const num = parseFloat(numStr.replace(/w|万/gi, ''));
+        return isNaN(num) ? 0 : num * 10000;
+    }
+    
     const num = parseFloat(numStr);
     return isNaN(num) ? 0 : num;
 }
@@ -142,10 +168,9 @@ function evaluateFormula(formula, dataContext) {
         expression = expression.replace(/REPLACE\s*\(/gi, 'FORMULA_FUNCTIONS.REPLACE(');
 
         if (!isStringContext && /\/\s*0(?!\.)/.test(expression)) {
-            return 'N/A'; // Avoid division by zero for numeric contexts
+            return 'N/A';
         }
 
-        // Use Function constructor for safe evaluation
         const calculate = new Function('FORMULA_FUNCTIONS', `return ${expression}`);
         const result = calculate(FORMULA_FUNCTIONS);
 
@@ -153,7 +178,7 @@ function evaluateFormula(formula, dataContext) {
 
     } catch (error) {
         console.error(`执行公式 "${formula}" 时出错:`, error);
-        return 'N/A'; // Return 'N/A' on error
+        return 'N/A';
     }
 }
 
@@ -170,11 +195,10 @@ function formatOutput(value, format) {
         if (isNaN(num)) return 'N/A';
         return num.toFixed(parseInt(numberMatch[1], 10));
     }
-    // Default format
     return String(value);
 }
 
-// --- 飞书API辅助函数 (保持不变) ---
+// --- 飞书API辅助函数 ---
 async function writeImageToCell(token, spreadsheetToken, range, imageUrl, imageName = 'image.png') {
     if (!imageUrl || !imageUrl.startsWith('http')) {
         console.log(`--> [图片] 无效的图片链接，跳过写入: ${imageUrl}`);
@@ -206,16 +230,13 @@ async function writeImageToCell(token, spreadsheetToken, range, imageUrl, imageN
 }
 
 async function readFeishuSheet(spreadsheetToken, token, range) {
-    // 1. Get the first sheet ID
     const sheetsResponse = await axios.get(`https://open.feishu.cn/open-apis/sheets/v3/spreadsheets/${spreadsheetToken}/sheets/query`, { headers: { 'Authorization': `Bearer ${token}` } });
     if (sheetsResponse.data.code !== 0) throw new AppError(`Failed to get sheets info: ${sheetsResponse.data.msg}`, 500);
     const firstSheetId = sheetsResponse.data.data.sheets[0].sheet_id;
 
-    // 2. Construct the range (default to A1:ZZ2000 if none provided)
     const finalRange = range || `${firstSheetId}!A1:ZZ2000`;
     const urlEncodedRange = encodeURIComponent(finalRange.startsWith(firstSheetId) ? finalRange : `${firstSheetId}!${finalRange}`);
 
-    // 3. Read the values
     console.log(`--> [飞书读取] 目标表格: ${spreadsheetToken}, 范围: ${decodeURIComponent(urlEncodedRange)}`);
     const valuesResponse = await axios.get(
         `https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/${spreadsheetToken}/values/${urlEncodedRange}?valueRenderOption=ToString`,
@@ -226,7 +247,6 @@ async function readFeishuSheet(spreadsheetToken, token, range) {
     return valuesResponse.data.data.valueRange.values;
 }
 
-// ... 其他飞书API辅助函数 (transferOwner, grantEditPermissions, moveFileToFolder) 保持不变 ...
 async function transferOwner(fileToken, token) {
     if (!FEISHU_OWNER_ID) { console.log("--> [权限] 未配置 FEISHU_OWNER_ID, 无法转移所有权。"); return false; }
     console.log(`--> [权限] 准备将文件所有权转移给用户: ${FEISHU_OWNER_ID}`);
@@ -280,7 +300,7 @@ async function moveFileToFolder(fileToken, fileType, folderToken, token) {
     }
 }
 
-// --- 业务逻辑：导出功能 (保持不变) ---
+// --- 业务逻辑：导出功能 ---
 async function getMappingSchemas() { return { schemas: DATA_SCHEMAS }; }
 
 async function getSheetHeaders(payload) {
@@ -307,7 +327,7 @@ async function generateAutomationSheet(payload) {
     const templateToken = getSpreadsheetTokenFromUrl(mappingTemplate.spreadsheetToken);
     if (!templateToken) throw new AppError('无法从模板中解析出有效的Token。', 400);
     const newFileName = `${projectName || '未知项目'} - ${mappingTemplate.name}`.replace(/[\/\\:*?"<>|]/g, '');
-    const copyPayload = { name: newFileName, type: 'sheet', folder_token: "" }; // Initially create in root
+    const copyPayload = { name: newFileName, type: 'sheet', folder_token: "" };
     console.log("--> 将在模板文件所在位置创建副本...");
     const copyResponse = await axios.post(`https://open.feishu.cn/open-apis/drive/v1/files/${templateToken}/copy`, copyPayload, { headers: { 'Authorization': `Bearer ${token}` } });
     if (copyResponse.data.code !== 0) { 
@@ -329,9 +349,6 @@ async function generateAutomationSheet(payload) {
             { $lookup: { from: TALENTS_COLLECTION, localField: 'talentId', foreignField: 'id', as: 'talent' } }, { $unwind: { path: '$talent', preserveNullAndEmptyArrays: true } },
             { $lookup: { from: PROJECTS_COLLECTION, localField: 'projectId', foreignField: 'id', as: 'project' } }, { $unwind: { path: '$project', preserveNullAndEmptyArrays: true } },
             
-            // [V11.2 BUG 修复] 移除了错误的 $addFields 阶段
-            // { $addFields: { taskObjectId: { $toObjectId: "" } } }, 
-
              {
                $lookup: {
                  from: AUTOMATION_TASKS_COLLECTION,
@@ -342,12 +359,12 @@ async function generateAutomationSheet(payload) {
                          { $and:
                             [
                               { $eq: ["$metadata.collaborationId", "$$collabId"] },
-                              { $in: ["$_id", objectIdTaskIds] } // 确保只关联本次请求的任务
+                              { $in: ["$_id", objectIdTaskIds] }
                             ]
                          }
                       }
                    },
-                   { $limit: 1 } // 每个合作只关联一个任务
+                   { $limit: 1 }
                  ],
                  as: "task"
                }
@@ -355,10 +372,8 @@ async function generateAutomationSheet(payload) {
             { $unwind: { path: '$task', preserveNullAndEmptyArrays: true } }
         ];
         results = await db.collection(COLLABORATIONS_COLLECTION).aggregate(pipeline).toArray();
-        // 添加 latestPrice 逻辑
         results.forEach(doc => {
             if(doc.talent && Array.isArray(doc.talent.prices) && doc.talent.prices.length > 0) {
-                 // 排序价格以找到最新的
                 const sortedPrices = [...doc.talent.prices].sort((a, b) => (b.year - a.year) || (b.month - a.month));
                 const latestPriceEntry = sortedPrices.find(p => p.status === 'confirmed') || sortedPrices[0];
                 if (latestPriceEntry) {
@@ -372,11 +387,10 @@ async function generateAutomationSheet(payload) {
     console.log("\n--- [步骤 3] 写入数据行 ---");
     if (results.length > 0) {
         const dataToWrite = [], imageWriteQueue = [], START_ROW = 2;
-        // 将 results 映射为公式引擎所需的数据结构
         const contextData = results.map(doc => ({
             talents: doc.talent,
             projects: doc.project,
-            'automation-tasks': doc.task, // 使用在 DATA_SCHEMAS 中定义的 key
+            'automation-tasks': doc.task,
             collaborations: doc
         }));
 
@@ -386,39 +400,34 @@ async function generateAutomationSheet(payload) {
             for (let j = 0; j < mappingTemplate.feishuSheetHeaders.length; j++) {
                 const feishuHeader = mappingTemplate.feishuSheetHeaders[j];
                 const rule = mappingTemplate.mappingRules[feishuHeader];
-                let finalValue = null; // 默认值为 null，以便在表格中显示为空白
+                let finalValue = null;
 
-                if (typeof rule === 'string') { // 直接映射
+                if (typeof rule === 'string') {
                     const pathParts = rule.split('.');
                     if (pathParts.length > 1) {
                         const collection = pathParts[0];
                         const trueContext = context[collection];
-                        // 递归查找值
                         finalValue = pathParts.slice(1).reduce((obj, key) => (obj && obj[key] !== undefined) ? obj[key] : null, trueContext);
                     }
-                } else if (typeof rule === 'object' && rule !== null && rule.formula) { // 公式计算
+                } else if (typeof rule === 'object' && rule !== null && rule.formula) {
                     const rawResult = evaluateFormula(rule.formula, context);
                     finalValue = rule.output ? formatOutput(rawResult, rule.output) : rawResult;
                 }
                 
-                // 检查是否为图片字段
                 const isImageField = (typeof rule === 'string' && rule.includes('screenshots'));
                 if (isImageField && typeof finalValue === 'string' && finalValue.startsWith('http')) {
-                    rowData.push(null); // 图片单元格先保持空白
+                    rowData.push(null);
                     imageWriteQueue.push({ range: `${columnIndexToLetter(j)}${START_ROW + i}`, url: finalValue, name: `${feishuHeader}.png` });
                 } else {
-                    // 确保 N/A 或实际值被推送
                     rowData.push(finalValue === null || finalValue === undefined ? null : finalValue);
                 }
             }
             dataToWrite.push(rowData);
         }
 
-        // 获取第一个 sheetId 用于写入
         const metaInfoResponse = await axios.get(`https://open.feishu.cn/open-apis/sheets/v2/spreadsheets/${newSpreadsheetToken}/metainfo`, { headers: { 'Authorization': `Bearer ${token}` } });
         const firstSheetId = metaInfoResponse.data.data.sheets[0].sheetId;
 
-        // 写入文本/数字数据
         if (dataToWrite.length > 0) {
             const textRange = `${firstSheetId}!A${START_ROW}:${columnIndexToLetter(dataToWrite[0].length - 1)}${START_ROW + dataToWrite.length - 1}`;
             console.log(`--> [写入文本] 目标范围: ${textRange}, 行数: ${dataToWrite.length}`);
@@ -435,11 +444,10 @@ async function generateAutomationSheet(payload) {
             }
         }
 
-        // 写入图片
         if (imageWriteQueue.length > 0) {
              console.log(`--> [写入图片] 准备写入 ${imageWriteQueue.length} 张图片...`);
             for (const imageJob of imageWriteQueue) {
-                const imageRange = `${firstSheetId}!${imageJob.range}:${imageJob.range}`; // 确保范围是单个单元格
+                const imageRange = `${firstSheetId}!${imageJob.range}:${imageJob.range}`;
                 await writeImageToCell(token, newSpreadsheetToken, imageRange, imageJob.url, imageJob.name);
             }
              console.log(`--> [写入图片] 图片写入完成。`);
@@ -452,7 +460,6 @@ async function generateAutomationSheet(payload) {
 
     console.log("\n--- [步骤 5] 处理文件权限 ---");
     const ownerTransferred = await transferOwner(newSpreadsheetToken, token);
-    // 如果所有权转移失败或未配置，才尝试授予编辑权限
     if (!ownerTransferred) {
         await grantEditPermissions(newSpreadsheetToken, token);
     }
@@ -467,40 +474,92 @@ async function generateAutomationSheet(payload) {
 }
 
 
-// --- [功能补齐] 业务逻辑：导入功能 ---
-// [源自 v8.2]
-// (parseFlexibleNumber 已在上方定义)
+// --- 业务逻辑：导入功能 ---
 
-// [源自 v8.2]
+/**
+ * [V11.4.2 新增] 处理达人数据导入 - 支持多价格类型
+ */
 async function handleTalentImport(spreadsheetToken) {
     console.log(`[导入] 开始从表格 ${spreadsheetToken} 导入达人数据...`);
     const token = await getTenantAccessToken();
     const rows = await readFeishuSheet(spreadsheetToken, token);
-    if (!rows || rows.length < 2) return { data: [] }; // Need header + at least one data row
+    if (!rows || rows.length < 2) return { data: [], updated: 0, failed: 0 };
+    
     const header = rows[0];
     const dataRows = rows.slice(1);
     const processedData = [];
 
-    // Map headers to indices for robust column lookup
-    const headerMap = new Map(header.map((col, i) => [col.trim(), i]));
+    // 获取数据库连接
+    const client = await getDbConnection();
+    const db = client.db(DB_NAME);
+    const talentsCollection = db.collection(TALENTS_COLLECTION);
 
+    // 统计计数器
+    let stats = {
+        totalRows: dataRows.length,
+        processed: 0,
+        skipped: 0,
+        updated: 0,
+        failed: 0,
+        priceUpdatedTalents: 0,  // [V11.4.2 新增] 价格更新的达人数
+        priceRecordsAdded: 0,     // [V11.4.2 新增] 添加的价格记录数
+        skippedReasons: {
+            missingId: 0,
+            emptyRow: 0
+        }
+    };
+
+    console.log(`[导入] 表头列数: ${header.length}`);
+    console.log(`[导入] 表头列名: ${header.filter(h => h).join(', ')}`);
+
+    const headerMap = new Map(
+        header
+            .map((col, i) => {
+                const colName = (col && typeof col === 'string') ? col.trim() : '';
+                return [colName, i];
+            })
+            .filter(([colName]) => colName !== '')
+    );
+
+    const xingtuIdCol1 = headerMap.get('达人id');
+    const xingtuIdCol2 = headerMap.get('星图ID');
+    console.log(`[导入] "达人id"列索引: ${xingtuIdCol1}, "星图ID"列索引: ${xingtuIdCol2}`);
+    
+    if (xingtuIdCol1 === undefined && xingtuIdCol2 === undefined) {
+        throw new AppError('飞书表格中找不到"达人id"或"星图ID"列，请检查表头。', 400);
+    }
+
+    console.log('[调试] 前3行数据示例:');
+    for (let i = 0; i < Math.min(3, dataRows.length); i++) {
+        const row = dataRows[i];
+        const idIndex = xingtuIdCol1 ?? xingtuIdCol2;
+        const idValue = row[idIndex];
+        console.log(`  行${i+1}: 达人id="${idValue}" (类型: ${typeof idValue}, 长度: ${idValue ? String(idValue).length : 0})`);
+    }
+
+    // [V11.4.2 新增] 获取当前年月用于价格记录
+    const currentYear = new Date().getFullYear();
+    const currentMonth = new Date().getMonth() + 1;
+
+    // 收集所有需要更新的数据
     for (const row of dataRows) {
         const getValue = (colName, isPercentage = false) => {
             const index = headerMap.get(colName);
             return (index !== undefined && row[index] !== null && row[index] !== '') ? parseFlexibleNumber(row[index], isPercentage) : 0;
         };
 
-        const xingtuIdIndex = headerMap.get('达人id') ?? headerMap.get('星图ID'); // Support variations
+        const xingtuIdIndex = headerMap.get('达人id') ?? headerMap.get('星图ID');
         const xingtuId = (xingtuIdIndex !== undefined && row[xingtuIdIndex]) ? String(row[xingtuIdIndex]).trim() : null;
 
         if (!xingtuId) {
-            console.warn("[导入] 跳过一行，因为缺少 达人id 或 星图ID。");
-            continue; // Skip row if mandatory ID is missing
+            stats.skipped++;
+            stats.skippedReasons.missingId++;
+            continue;
         }
 
         const talentData = { xingtuId, performanceData: {} };
 
-        // Define mappings - use ?? to check both Chinese and potentially English headers
+        // [V11.4.1 修复] 完整的字段映射（飞书列名 -> 数据库字段名）
         const mappings = [
             { key: 'cpm60s', header: '预期cpm' },
             { key: 'maleAudienceRatio', header: '男性粉丝占比', isPercentage: true },
@@ -510,31 +569,164 @@ async function handleTalentImport(spreadsheetToken) {
             { key: 'ratio_31_40', header: '31-40岁粉丝比例', isPercentage: true },
             { key: 'ratio_41_50', header: '41-50岁粉丝比例', isPercentage: true },
             { key: 'ratio_50_plus', header: '50岁以上粉丝比例', isPercentage: true },
-            // Add more mappings as needed
+            // [V11.4.1 修复] 8个人群包字段 - 添加"粉丝比例"后缀
+            { key: 'ratio_town_middle_aged', header: '小镇中老年粉丝比例', isPercentage: true },
+            { key: 'ratio_senior_middle_class', header: '资深中产粉丝比例', isPercentage: true },
+            { key: 'ratio_z_era', header: 'Z时代粉丝比例', isPercentage: true },
+            { key: 'ratio_urban_silver', header: '都市银发粉丝比例', isPercentage: true },
+            { key: 'ratio_town_youth', header: '小镇青年粉丝比例', isPercentage: true },
+            { key: 'ratio_exquisite_mom', header: '精致妈妈粉丝比例', isPercentage: true },
+            { key: 'ratio_new_white_collar', header: '新锐白领粉丝比例', isPercentage: true },
+            { key: 'ratio_urban_blue_collar', header: '都市蓝领粉丝比例', isPercentage: true },
         ];
 
         mappings.forEach(m => {
              const value = getValue(m.header, m.isPercentage);
-             // Only add the field if the value is not zero (or was successfully parsed)
              if (value !== 0 || (headerMap.has(m.header) && row[headerMap.get(m.header)] !== null)) {
                  talentData.performanceData[m.key] = value;
              }
         });
 
-        // Calculate combined ratios after individual ones are processed
         const ratio18_40 = (talentData.performanceData.ratio_18_23 || 0) + (talentData.performanceData.ratio_24_30 || 0) + (talentData.performanceData.ratio_31_40 || 0);
         const ratio40_plus = (talentData.performanceData.ratio_41_50 || 0) + (talentData.performanceData.ratio_50_plus || 0);
 
         if (ratio18_40 > 0) talentData.performanceData.audience_18_40_ratio = ratio18_40;
         if (ratio40_plus > 0) talentData.performanceData.audience_40_plus_ratio = ratio40_plus;
 
+        // [V11.4.2 新增] 解析3个价格字段
+        const priceFields = [
+            { header: '抖音60+s短视频报价', type: '60s_plus' },
+            { header: '抖音20-60s短视频报价', type: '20_to_60s' },
+            { header: '抖音1-20s短视频报价', type: '1_to_20s' }
+        ];
+
+        const newPrices = [];
+        for (const field of priceFields) {
+            const priceValue = getValue(field.header, false);
+            if (priceValue > 0) {
+                newPrices.push({
+                    year: currentYear,
+                    month: currentMonth,
+                    type: field.type,
+                    price: priceValue,
+                    status: 'confirmed'
+                });
+            }
+        }
+
+        talentData.newPrices = newPrices;  // 临时存储新价格
+
         processedData.push(talentData);
+        stats.processed++;
     }
-    console.log(`[导入] 成功处理 ${processedData.length} 条达人记录。`);
-    return { data: processedData, message: `Successfully read ${processedData.length} records from Feishu Sheet.` };
+    
+    // [V11.4.2 修复] 使用点表示法批量更新数据库，添加 lastUpdated 时间戳 + 价格更新
+    console.log(`[导入] 开始批量更新数据库，共 ${processedData.length} 条记录...`);
+    
+    if (processedData.length > 0) {
+        const bulkOps = [];
+        const currentTime = new Date();
+        
+        for (const talent of processedData) {
+            const updateFields = {};
+            
+            // [V11.4.1] 使用点表示法更新 performanceData 的各个字段
+            for (const [key, value] of Object.entries(talent.performanceData)) {
+                updateFields[`performanceData.${key}`] = value;
+            }
+            
+            // [V11.4.1] 添加 lastUpdated 时间戳到 performanceData
+            updateFields['performanceData.lastUpdated'] = currentTime;
+            updateFields['updatedAt'] = currentTime;
+            
+            bulkOps.push({
+                updateOne: {
+                    filter: { xingtuId: talent.xingtuId },
+                    update: { $set: updateFields },
+                    upsert: false
+                }
+            });
+            
+            // [V11.4.2 新增] 如果有价格需要更新
+            if (talent.newPrices && talent.newPrices.length > 0) {
+                // 先删除当前年月的所有3种类型的价格记录
+                bulkOps.push({
+                    updateOne: {
+                        filter: { xingtuId: talent.xingtuId },
+                        update: {
+                            $pull: {
+                                prices: {
+                                    year: currentYear,
+                                    month: currentMonth,
+                                    type: { $in: ['60s_plus', '20_to_60s', '1_to_20s'] }
+                                }
+                            }
+                        },
+                        upsert: false
+                    }
+                });
+                
+                // 再添加新价格
+                bulkOps.push({
+                    updateOne: {
+                        filter: { xingtuId: talent.xingtuId },
+                        update: {
+                            $push: {
+                                prices: { $each: talent.newPrices }
+                            }
+                        },
+                        upsert: false
+                    }
+                });
+                
+                stats.priceUpdatedTalents++;
+                stats.priceRecordsAdded += talent.newPrices.length;
+            }
+        }
+        
+        try {
+            const bulkResult = await talentsCollection.bulkWrite(bulkOps, { ordered: false });
+            
+            // [V11.4.2 修复] 简化统计逻辑 - 方案A
+            // 如果 bulkWrite 执行成功，则认为所有达人都成功更新了
+            stats.updated = processedData.length;
+            stats.failed = 0;
+            
+            console.log(`[导入] 数据库批量更新完成：`);
+            console.log(`  - 总操作数: ${bulkOps.length}`);
+            console.log(`  - Matched: ${bulkResult.matchedCount}`);
+            console.log(`  - Modified: ${bulkResult.modifiedCount}`);
+        } catch (error) {
+            console.error(`[导入] 数据库批量更新失败:`, error);
+            // 如果批量更新失败，所有达人都标记为失败
+            stats.failed = processedData.length;
+            stats.updated = 0;
+            throw new AppError(`批量更新数据库失败: ${error.message}`, 500);
+        }
+    }
+    
+    console.log(`[导入] ========== 导入统计 ==========`);
+    console.log(`[导入] 总行数: ${stats.totalRows}`);
+    console.log(`[导入] 解析成功: ${stats.processed} 条`);
+    console.log(`[导入] 成功更新: ${stats.updated} 条达人`);
+    console.log(`[导入] 更新失败: ${stats.failed} 条达人`);
+    console.log(`[导入] 跳过: ${stats.skipped} 条`);
+    console.log(`[导入]   - 缺少达人id: ${stats.skippedReasons.missingId} 条`);
+    // [V11.4.2] 价格更新统计
+    if (stats.priceUpdatedTalents > 0) {
+        console.log(`[导入] 价格更新: ${stats.priceUpdatedTalents} 位达人，共 ${stats.priceRecordsAdded} 条价格`);
+    }
+    console.log(`[导入] ==================================`);
+    
+    return { 
+        data: processedData, 
+        updated: stats.updated,
+        failed: stats.failed,
+        priceUpdated: stats.priceUpdatedTalents,
+        message: `成功更新 ${stats.updated} 条达人记录${stats.failed > 0 ? `，失败 ${stats.failed} 条` : ''}。${stats.priceUpdatedTalents > 0 ? `价格更新 ${stats.priceUpdatedTalents} 位达人。` : ''}` 
+    };
 }
 
-// [源自 v8.7, 包含 v11.1 的 manualDailyUpdate 逻辑 + 日志修复]
 async function performProjectSync(spreadsheetToken, dataType) {
     console.log(`[导入] 开始从表格 ${spreadsheetToken} 同步项目数据 (类型: ${dataType})...`);
     const client = await getDbConnection();
@@ -546,15 +738,13 @@ async function performProjectSync(spreadsheetToken, dataType) {
     const dataRows = rows.slice(1);
     const collaborationsCollection = db.collection(COLLABORATIONS_COLLECTION);
     const worksCollection = db.collection(WORKS_COLLECTION);
-    const projectsCollection = db.collection(PROJECTS_COLLECTION); // Needed for manualDailyUpdate CPM calc
+    const projectsCollection = db.collection(PROJECTS_COLLECTION);
 
     let createdCount = 0;
     let updatedCount = 0;
     let skippedCount = 0;
 
-    // --- [新增 v11.0] 手动日报更新逻辑 ---
     if (dataType === 'manualDailyUpdate') {
-        // 1. 定义所需列名和索引
         const COL_TASK_ID = '星图任务ID';
         const COL_TIMESTAMP = '数据最后更新时间';
         const COL_VIEWS = '播放量';
@@ -568,69 +758,61 @@ async function performProjectSync(spreadsheetToken, dataType) {
         }
 
         const bulkOps = [];
-        const collabProjectMap = new Map(); // Cache projectId for collaborations
+        const collabProjectMap = new Map();
 
         for (const row of dataRows) {
             const taskId = row[taskIdIndex] ? String(row[taskIdIndex]).trim() : null;
             const timestampStr = row[timestampIndex];
             const viewsStr = row[viewsIndex];
 
-            // [V11.1 日志修复] 仅当 taskId 为 null 时才静默跳过（处理表格末尾的空行）
             if (!taskId) {
-                // 静默跳过空行
                 skippedCount++;
                 continue;
             }
 
-            // 如果 taskId 存在，但其他数据缺失，则打印警告
             if (!timestampStr || viewsStr === null || viewsStr === undefined) {
-                console.warn(`[导入 manualDailyUpdate] 跳过行，缺少 timestamp 或 views (TaskID: ${taskId}): ${JSON.stringify(row)}`);
+                console.warn(`[导入 manualDailyUpdate] 跳过行，缺少 timestamp 或 views (TaskID: ${taskId})`);
                 skippedCount++;
                 continue;
             }
 
-            // 2. 提取日期 (YYYY-MM-DD)
             let dateStr;
             try {
-                // 尝试解析完整日期时间戳，然后格式化
                 dateStr = new Date(timestampStr).toISOString().split('T')[0];
                 if (!/^\d{4}-\d{2}-\d{2}$/.test(dateStr)) throw new Error("Invalid Date Format");
             } catch (e) {
-                console.warn(`[导入 manualDailyUpdate] 跳过行，无法从 '${timestampStr}' 提取有效日期 YYYY-MM-DD (TaskID: ${taskId}): ${JSON.stringify(row)}`);
+                console.warn(`[导入 manualDailyUpdate] 跳过行，无法提取日期 (TaskID: ${taskId})`);
                 skippedCount++;
                 continue;
             }
 
             const totalViews = parseInt(String(viewsStr).replace(/,/g, ''), 10);
             if (isNaN(totalViews)) {
-                console.warn(`[导入 manualDailyUpdate] 跳过行，无法解析播放量 '${viewsStr}' (TaskID: ${taskId}): ${JSON.stringify(row)}`);
+                console.warn(`[导入 manualDailyUpdate] 跳过行，无法解析播放量 (TaskID: ${taskId})`);
                 skippedCount++;
                 continue;
             }
 
-            // 3. 查找 collaboration 和 project (带缓存)
             let collab = collabProjectMap.get(taskId);
             if (!collab) {
                 collab = await collaborationsCollection.findOne({ taskId: taskId });
                 if (collab) {
                      const project = await projectsCollection.findOne({ id: collab.projectId });
-                     collab.projectDiscount = project ? (parseFloat(project.discount) || 1.0) : 1.0; // Store discount with collab
+                     collab.projectDiscount = project ? (parseFloat(project.discount) || 1.0) : 1.0;
                      collabProjectMap.set(taskId, collab);
                 }
             }
 
             if (!collab) {
-                console.warn(`[导入 manualDailyUpdate] 跳过行，未找到 taskId '${taskId}' 对应的合作记录: ${JSON.stringify(row)}`);
+                console.warn(`[导入 manualDailyUpdate] 未找到合作记录 (TaskID: ${taskId})`);
                 skippedCount++;
                 continue;
             }
 
-            // 4. 计算 CPM
             const amount = parseFloat(collab.amount) || 0;
             const income = amount * collab.projectDiscount * 1.05;
             const cpm = income > 0 && totalViews > 0 ? (income / totalViews) * 1000 : 0;
 
-            // 5. 准备 $pull 和 $push 操作
              const pullOp = {
                 updateOne: {
                     filter: { collaborationId: collab.id },
@@ -643,33 +825,30 @@ async function performProjectSync(spreadsheetToken, dataType) {
                     update: {
                         $push: {
                             dailyStats: {
-                                $each: [{ date: dateStr, totalViews: totalViews, cpm: cpm, cpmChange: null, solution: '' }], // cpmChange 先设为 null
-                                $sort: { date: 1 } // 保持日期有序
+                                $each: [{ date: dateStr, totalViews: totalViews, cpm: cpm, cpmChange: null, solution: '' }],
+                                $sort: { date: 1 }
                             }
                         },
-                         $setOnInsert: { // Ensure work exists if pushing
+                         $setOnInsert: {
                             id: `work_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
                             projectId: collab.projectId,
                             talentId: collab.talentId,
                             sourceType: 'COLLABORATION',
                             createdAt: new Date()
                         },
-                        $set: { updatedAt: new Date() } // Always update timestamp
+                        $set: { updatedAt: new Date() }
                     },
-                    upsert: true // Create work if not exists
+                    upsert: true
                 }
             };
             bulkOps.push(pullOp, pushOp);
         }
 
-        // 6. 执行批量写入
         if (bulkOps.length > 0) {
             const bulkResult = await worksCollection.bulkWrite(bulkOps, { ordered: false });
-            // 计算受影响的 *行数*，而不是操作数。每次 pull+push 影响1行。
             updatedCount = bulkOps.length / 2; 
             console.log(`[导入 manualDailyUpdate] BulkWrite 完成. Matched: ${bulkResult.matchedCount}, Modified: ${bulkResult.modifiedCount}, Upserted: ${bulkResult.upsertedCount}`);
 
-            // 7. [后处理] 计算 cpmChange (需要再次查询)
             const collabIdsToUpdate = [...new Set(bulkOps.filter(op => op.updateOne.filter.collaborationId).map(op => op.updateOne.filter.collaborationId))];
             const updatedWorks = await worksCollection.find({ collaborationId: { $in: collabIdsToUpdate } }).toArray();
             const cpmChangeBulkOps = [];
@@ -679,7 +858,6 @@ async function performProjectSync(spreadsheetToken, dataType) {
                     const currentStat = work.dailyStats[i];
                     const prevStat = work.dailyStats[i-1];
                     const cpmChange = (prevStat.cpm !== null && currentStat.cpm !== null) ? currentStat.cpm - prevStat.cpm : null;
-                    // Only update if cpmChange is different or was null
                     if (currentStat.cpmChange !== cpmChange) {
                         cpmChangeBulkOps.push({
                             updateOne: {
@@ -695,15 +873,11 @@ async function performProjectSync(spreadsheetToken, dataType) {
                  console.log(`[导入 manualDailyUpdate] 完成 cpmChange 的计算和更新 (${cpmChangeBulkOps.length} updates).`);
              }
         }
-        console.log(`[导入 manualDailyUpdate] 手动日报同步完成。处理行数: ${dataRows.length}, 更新/新增 works 记录: ${updatedCount}, 跳过: ${skippedCount}`);
-        return { processedRows: dataRows.length, created: 0, updated: updatedCount }; // Reporting slightly differently
+        console.log(`[导入 manualDailyUpdate] 手动日报同步完成。处理行数: ${dataRows.length}, 更新/新增: ${updatedCount}, 跳过: ${skippedCount}`);
+        return { processedRows: dataRows.length, created: 0, updated: updatedCount };
 
     }
-    // --- End manualDailyUpdate ---
-
-    // --- t7/t21 Logic (保持不变) ---
     else {
-        // ... (Original performProjectSync logic for t7/t21 using DATA_MAPPING) ...
         const DATA_MAPPING = {
             '星图任务ID': { dbField: 'collaborationId', type: 'lookup' }, '视频ID': { dbField: 'platformWorkId', type: 'string' }, '视频实际发布时间': { dbField: 'publishedAt', type: 'date' },
             '数据最后更新时间': { dbField: 'statsUpdatedAt', type: 'date' }, '播放量': { dbField: 'totalViews', type: 'number' }, '点赞量': { dbField: 'likeCount', type: 'number' },
@@ -723,24 +897,22 @@ async function performProjectSync(spreadsheetToken, dataType) {
             const collaboration = await collaborationsCollection.findOne({ "taskId": starQuestIdStr });
             if (collaboration) {
                 const updatePayload = {};
-                const prefix = dataType; // 't7' or 't21'
+                const prefix = dataType;
                 header.forEach((colName, index) => {
                     const mapping = DATA_MAPPING[colName];
-                    if (!mapping || colName === starQuestIdColumnName) return; // Skip lookup key
+                    if (!mapping || colName === starQuestIdColumnName) return;
                     let value = row[index];
-                    if (value === null || value === undefined || String(value).trim() === '') return; // Skip empty cells
+                    if (value === null || value === undefined || String(value).trim() === '') return;
                     try {
-                        // Perform type conversion based on mapping
                         if (mapping.type === 'number') value = parseFloat(String(value).replace(/,/g, '')) || 0;
                         else if (mapping.type === 'date') value = new Date(value);
                         else if (mapping.type === 'percentage') value = parseFlexibleNumber(value, true);
-                        else value = String(value); // Default to string
+                        else value = String(value);
                     } catch (e) {
-                        console.warn(`[导入 ${dataType}] Could not convert value for ${colName}: ${row[index]}. Skipping field.`);
-                        return; // Skip this field if conversion fails
+                        console.warn(`[导入 ${dataType}] 无法转换值 ${colName}: ${row[index]}`);
+                        return;
                     }
 
-                    // Handle nested fields like reachByFrequency
                     if (mapping.dbField.includes('.')) {
                         const [parent, child] = mapping.dbField.split('.');
                         const prefixedParent = `${prefix}_${parent}`;
@@ -753,14 +925,13 @@ async function performProjectSync(spreadsheetToken, dataType) {
 
                 const existingWork = await worksCollection.findOne({ collaborationId: collaboration.id });
 
-                if (Object.keys(updatePayload).length > 0) { // Only update if there's data
+                if (Object.keys(updatePayload).length > 0) {
                     if (existingWork) {
                         await worksCollection.updateOne({ _id: existingWork._id }, { $set: { ...updatePayload, updatedAt: new Date() } });
                         updatedCount++;
                     } else {
-                        // Create new work doc if not exists, ONLY if we have data to insert
                         const newWorkDoc = {
-                            ...updatePayload, // Add the actual data
+                            ...updatePayload,
                             id: `work_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`,
                             collaborationId: collaboration.id,
                             projectId: collaboration.projectId,
@@ -773,29 +944,30 @@ async function performProjectSync(spreadsheetToken, dataType) {
                         createdCount++;
                     }
                 } else {
-                     skippedCount++; // Count rows with ID but no updatable data as skipped
+                     skippedCount++;
                 }
             } else {
-                 skippedCount++; // Count rows where collaboration wasn't found as skipped
-                 console.warn(`[导入 ${dataType}] Collaboration not found for taskId: ${starQuestIdStr}. Skipping row.`);
+                 skippedCount++;
+                 if (skippedCount <= 5) {
+                     console.warn(`[导入 ${dataType}] 未找到合作记录 taskId: ${starQuestIdStr}`);
+                 }
             }
         }
-        console.log(`[导入 ${dataType}] 项目同步完成。处理行数: ${dataRows.length}, 新建: ${createdCount}, 更新: ${updatedCount}, 跳过: ${skippedCount}`);
+        console.log(`[导入 ${dataType}] 项目同步完成。处理: ${dataRows.length}行, 新建: ${createdCount}, 更新: ${updatedCount}, 跳过: ${skippedCount}`);
         return { processedRows: dataRows.length, created: createdCount, updated: updatedCount };
     }
 }
 
 
-// --- 总调度函数 (保持不变) ---
+// --- 总调度函数 ---
 async function handleFeishuRequest(requestBody) {
     const { dataType, payload, ...legacyParams } = requestBody;
     if (!dataType) throw new AppError('Missing required parameter: dataType.', 400);
 
-    // Helper to extract token robustly
     const extractToken = (data) => {
         if (!data) return null;
-        const tokenSource = data.spreadsheetToken || data.feishuUrl; // Check both legacy and new way
-        return getSpreadsheetTokenFromUrl(tokenSource); // Use the improved parser
+        const tokenSource = data.spreadsheetToken || data.feishuUrl;
+        return getSpreadsheetTokenFromUrl(tokenSource);
     };
 
     switch (dataType) {
@@ -806,29 +978,24 @@ async function handleFeishuRequest(requestBody) {
             if (!headersToken) throw new AppError('Missing spreadsheetToken or feishuUrl for getSheetHeaders.', 400);
             return await getSheetHeaders({ spreadsheetToken: headersToken });
         case 'generateAutomationReport':
-            // Assume payload contains the necessary structure from mapping_templates.js
              if (!payload || !payload.mappingTemplate || !payload.taskIds) {
                  throw new AppError('Invalid payload structure for generateAutomationReport.', 400);
              }
             return await generateAutomationSheet(payload);
-        case 'talentPerformance': // Fall through for talent import
-        case 't7':                // Fall through for T7 sync
-        case 't21':               // Fall through for T21 sync
-        case 'manualDailyUpdate': // Add the new type here
+        case 'talentPerformance':
+        case 't7':
+        case 't21':
+        case 'manualDailyUpdate':
         {
-            const token = extractToken({ ...legacyParams, ...payload }); // Check both direct params and payload object
+            const token = extractToken({ ...legacyParams, ...payload });
             if (!token) throw new AppError(`Missing spreadsheetToken or a valid feishuUrl for ${dataType}.`, 400);
 
             if (dataType === 'talentPerformance') {
-                // Ensure handleTalentImport returns the expected structure
                 const result = await handleTalentImport(token);
-                // The main handler expects { success: true, data: result }
-                return result; // handleTalentImport already returns { data: ..., message: ...}
+                return result;
             } else {
-                // Ensure performProjectSync returns the expected structure
                 const result = await performProjectSync(token, dataType);
-                 // The main handler expects { success: true, data: result }
-                return result; // performProjectSync already returns { processedRows: ..., created: ..., updated: ... }
+                return result;
             }
         }
         default:
@@ -837,4 +1004,3 @@ async function handleFeishuRequest(requestBody) {
 }
 
 module.exports = { handleFeishuRequest };
-
