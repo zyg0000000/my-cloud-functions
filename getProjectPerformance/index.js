@@ -1,12 +1,11 @@
 /**
  * @file getProjectPerformance.js
- * @version 3.2-details-rebuild
- * @description 效果看板API (数据明细重构版)
- * * --- 更新日志 (v3.2) ---
- * - [核心重构] 为支持“达人数据明细”的全面升级，重构了数据处理逻辑。
- * - [数据源增强] 接口现在会读取T+7的所有详细子指标，包括点赞、评论、分享、组件数据、完播率和触达分布。
- * - [新增指标] 为每个达人新增计算了`publishDate`, `interactionRate`, `likeToViewRatio`, `completionViews`, `totalReach`等多个衍生指标。
- * - [数据结构] 返回给前端的`talents`对象现在包含了驱动新版UI所需的全部数据字段。
+ * @version 3.3-t21-complete
+ * @description 效果看板API (T+21数据补全版)
+ * * --- 更新日志 (v3.3) ---
+ * - [T+21数据补全] 新增T+21的所有详细子指标，包括点赞、评论、分享、组件数据、完播率和触达分布
+ * - [数据对齐] T+21现在拥有与T+7完全相同的数据维度
+ * - [计算字段] 为T+21新增 interactions, interactionRate, likeToViewRatio, completionViews, totalReach 等衍生指标
  */
 const { MongoClient } = require('mongodb');
 
@@ -104,43 +103,73 @@ exports.handler = async (event, context) => {
             const t7_interactionRate = t7_views > 0 ? t7_interactions / t7_views : 0;
             const t7_likeToViewRatio = t7_views > 0 ? t7_likes / t7_views : 0;
             
-            // --- T+21 Metrics ---
-            const t21_views = work.t21_totalViews; 
-            const t21_cpm = (t21_views && t21_views > 0) ? (executionAmount / t21_views) * 1000 : null;
+            // --- T+21 Metrics (完整补全) ---
+            const t21_views = work.t21_totalViews || 0;
+            const t21_likes = work.t21_likeCount || 0;
+            const t21_comments = work.t21_commentCount || 0;
+            const t21_shares = work.t21_shareCount || 0;
+            const t21_interactions = t21_likes + t21_comments + t21_shares;
+            
+            const t21_componentClicks = work.t21_componentClickCount || 0;
+            const t21_componentImpressions = work.t21_componentImpressionCount || 0;
+
+            const t21_completionRate = work.t21_completionRate || 0;
+            const t21_completionViews = t21_views * t21_completionRate;
+
+            const t21_reachByFrequency = work.t21_reachByFrequency || {};
+            const t21_totalReach = Object.values(t21_reachByFrequency).reduce((sum, count) => sum + (count || 0), 0);
+
+            const t21_cpm = t21_views > 0 ? (executionAmount / t21_views) * 1000 : 0;
+            const t21_cpe = t21_interactions > 0 ? executionAmount / t21_interactions : 0;
+            const t21_ctr = t21_componentImpressions > 0 ? t21_componentClicks / t21_componentImpressions : 0;
+            const t21_interactionRate = t21_views > 0 ? t21_interactions / t21_views : 0;
+            const t21_likeToViewRatio = t21_views > 0 ? t21_likes / t21_views : 0;
 
             return {
                 id: collab.id,
                 talentName: talentInfo?.nickname || '未知达人',
                 publishDate: collab.publishDate,
                 executionAmount,
-                // T+7 Detailed Metrics
+                
+                // T+7 完整指标
                 t7_views, t7_likes, t7_comments, t7_shares, t7_interactions,
                 t7_componentClicks, t7_componentImpressions,
                 t7_completionRate, t7_completionViews,
                 t7_totalReach,
                 t7_cpm, t7_cpe, t7_ctr, t7_interactionRate, t7_likeToViewRatio,
-                // T+21 Metrics
-                t21_views, t21_cpm
+                
+                // T+21 完整指标（新增）
+                t21_views, t21_likes, t21_comments, t21_shares, t21_interactions,
+                t21_componentClicks, t21_componentImpressions,
+                t21_completionRate, t21_completionViews,
+                t21_totalReach,
+                t21_cpm, t21_cpe, t21_ctr, t21_interactionRate, t21_likeToViewRatio
             };
         });
 
         const overall = talentData.reduce((acc, talent) => {
             acc.totalExecutionAmount += talent.executionAmount;
+            
+            // T+7 汇总
             acc.t7_totalViews += talent.t7_views;
             acc.t7_totalInteractions += talent.t7_interactions;
             acc.t7_totalComponentClicks += talent.t7_componentClicks;
             acc.t7_totalComponentImpressions += talent.t7_componentImpressions;
             
+            // T+21 汇总
             if (talent.t21_views !== null && talent.t21_views !== undefined) {
                 acc.t21_totalViews += talent.t21_views;
+                acc.t21_totalInteractions += talent.t21_interactions;
             } else {
                 acc.hasMissingT21 = true;
             }
             return acc;
         }, {
-            totalExecutionAmount: 0, t7_totalViews: 0, t7_totalInteractions: 0,
+            totalExecutionAmount: 0, 
+            t7_totalViews: 0, t7_totalInteractions: 0,
             t7_totalComponentClicks: 0, t7_totalComponentImpressions: 0,
-            t21_totalViews: 0, hasMissingT21: false
+            t21_totalViews: 0, t21_totalInteractions: 0,
+            hasMissingT21: false
         });
 
         overall.t7_cpm = overall.t7_totalViews > 0 ? (overall.totalExecutionAmount / overall.t7_totalViews) * 1000 : 0;
@@ -149,6 +178,7 @@ exports.handler = async (event, context) => {
 
         if (overall.hasMissingT21) {
             overall.t21_totalViews = null;
+            overall.t21_totalInteractions = null;
             overall.t21_cpm = null;
             overall.targetViews = null;
             overall.viewsGap = null;
@@ -177,6 +207,7 @@ exports.handler = async (event, context) => {
                 t7_cpe: overall.t7_cpe,
                 t7_ctr: overall.t7_ctr,
                 t21_totalViews: overall.t21_totalViews,
+                t21_totalInteractions: overall.t21_totalInteractions,
                 t21_cpm: overall.t21_cpm
             },
             talents: talentData
@@ -200,4 +231,3 @@ exports.handler = async (event, context) => {
         }
     }
 };
-
