@@ -1,0 +1,18 @@
+{
+  "name": "get-field-metadata",
+  "version": "1.0.0",
+  "description": "返回所有可导出字段的元数据，支持前端动态渲染维度",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [
+    "metadata",
+    "fields",
+    "export",
+    "dimensions"
+  ],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {}
+}
