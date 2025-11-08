@@ -1,11 +1,9 @@
 /**
  * @file utils.js
- * @version 11.4.2 - Multi-Price Type Support (Fixed Stats)
+ * @version 11.4.3 - Percentage Field Fix
  * @description
- * - [BUG 修复] 修复统计逻辑错误（更新失败数显示为负数的问题）
- * - [功能新增] 支持从飞书同步3种价格类型（60s+、20-60s、1-20s短视频报价）
- * - [功能新增] 价格自动更新到当前年月，status为confirmed
- * - [功能新增] 添加价格更新统计日志
+ * - [BUG 修复] 修复百分比字段值被错误除以100的问题（只有包含%符号时才除以100）
+ * - [兼容性] 保留 V11.4.2 的统计逻辑修复和多价格类型支持
  * - [兼容性] 保留 V11.4.1 的字段映射修复和lastUpdated功能
  * - [兼容性] 保留 V11.4 的数据库批量更新功能
  * - [兼容性] 保留 V11.3 的 Null Safety Fix 和 parseFlexibleNumber 函数
@@ -123,7 +121,8 @@ function parseFlexibleNumber(value, isPercentage = false) {
     
     if (isPercentage || numStr.endsWith('%')) {
         const num = parseFloat(numStr.replace('%', ''));
-        return isNaN(num) ? 0 : num / 100;
+        // Only divide by 100 if there's an actual % symbol in the original string
+        return isNaN(num) ? 0 : (numStr.endsWith('%') ? num / 100 : num);
     }
     
     if (numStr.toLowerCase().endsWith('w') || numStr.includes('万')) {
