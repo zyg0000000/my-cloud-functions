@@ -1,7 +1,10 @@
 /**
  * @file getprojects_2.js
- * @version 4.8.2-tracking-enabled
- * @description 添加了对 trackingEnabled 字段的支持
+ * @version 4.9-tracking-status
+ * @description 支持新的 trackingStatus 字段
+ * * --- 更新日志 (v4.9) ---
+ * - [字段升级] 在 simple 和 full 视图中都返回 trackingStatus 字段
+ * - [向后兼容] 继续返回 trackingEnabled 字段以兼容旧前端
  * * --- 更新日志 (v4.8.2) ---
  * - [新增字段] 在 simple 和 full 视图中都返回 trackingEnabled 字段
  * - [目的] 支持前端根据此字段控制"效果追踪"功能的显示
@@ -98,8 +101,8 @@ exports.handler = async (event, context) => {
     // --- [兼容性保留] view=simple 逻辑完全不变 ---
     if (view === 'simple') {
       projectsData = await projectsCollection.find(baseMatch, {
-        // [v4.8.2 修改] 添加 trackingEnabled 到简单视图
-        projection: { _id: 0, id: 1, name: 1, status: 1, trackingEnabled: 1 }
+        // [v4.9 修改] 添加 trackingStatus 字段，保留 trackingEnabled 以兼容旧前端
+        projection: { _id: 0, id: 1, name: 1, status: 1, trackingEnabled: 1, trackingStatus: 1 }
       }).toArray();
     } else {
       // --- 完整视图逻辑 ---
@@ -332,8 +335,9 @@ exports.handler = async (event, context) => {
              _id: 0, id: 1, name: 1, qianchuanId: 1, type: 1, year: 1, month: 1, financialYear: 1, financialMonth: 1,
             status: 1, discount: 1, capitalRateId: 1, adjustments: 1, auditLog: 1, createdAt: 1, updatedAt: 1, budget: 1,
             benchmarkCPM: 1,
-            // [v4.8.2 新增] 添加 trackingEnabled 字段到完整视图
+            // [v4.9 新增] 添加 trackingStatus 字段，保留 trackingEnabled 以兼容旧前端
             trackingEnabled: 1,
+            trackingStatus: 1,
             projectFiles: 1,
 
             // [v4.7 核心改造] 将完整的 collaborations 数组包含在响应中
