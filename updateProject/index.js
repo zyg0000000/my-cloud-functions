@@ -1,7 +1,10 @@
 /**
  * @file updateProject.js
- * @version 1.4-tracking-enabled
+ * @version 1.5-tracking-status
  * @description 更新指定项目的基础信息或状态。
+ * * --- 更新日志 (v1.5) ---
+ * - [字段升级] 支持新的 `trackingStatus` 字段 (null/'active'/'archived')，替代 `trackingEnabled`
+ * - [向后兼容] 仍然支持旧的 `trackingEnabled` 布尔字段
  * * --- 更新日志 (v1.4) ---
  * - [新增字段] 在允许更新的字段白名单中增加了 `trackingEnabled` 字段。
  * - 支持通过此接口开启或关闭项目的"效果追踪"功能。
@@ -16,11 +19,11 @@ const MONGO_URI = process.env.MONGO_URI;
 const DB_NAME = process.env.MONGO_DB_NAME || 'kol_data';
 const PROJECTS_COLLECTION = process.env.MONGO_PROJECTS_COLLECTION || 'projects';
 
-// [v1.4] Add trackingEnabled to the list of allowed fields
+// [v1.5] Add trackingStatus to the list of allowed fields (replacing trackingEnabled)
 const ALLOWED_UPDATE_FIELDS = [
     'name', 'qianchuanId', 'type', 'budget', 'benchmarkCPM', 'year', 'month',
     'financialYear', 'financialMonth', 'discount', 'capitalRateId',
-    'status', 'adjustments', 'projectFiles', 'trackingEnabled'
+    'status', 'adjustments', 'projectFiles', 'trackingStatus', 'trackingEnabled'
 ];
 
 
@@ -65,7 +68,43 @@ exports.handler = async (event, context) => {
     const updatePayload = { $set: {}, $unset: {} };
     let hasValidFields = false;
 
+    // [v1.5] Handle trackingStatus and trackingEnabled conversion
+    let finalTrackingStatus = undefined;
+    if (Object.prototype.hasOwnProperty.call(updateFields, 'trackingStatus')) {
+        hasValidFields = true;
+        // Validate trackingStatus value
+        if (['active', 'archived'].includes(updateFields.trackingStatus)) {
+            finalTrackingStatus = updateFields.trackingStatus;
+        } else if (updateFields.trackingStatus === null || updateFields.trackingStatus === '') {
+            finalTrackingStatus = null;
+        }
+    } else if (Object.prototype.hasOwnProperty.call(updateFields, 'trackingEnabled')) {
+        hasValidFields = true;
+        // Convert legacy trackingEnabled to trackingStatus
+        if (updateFields.trackingEnabled === true || updateFields.trackingEnabled === 'true') {
+            finalTrackingStatus = 'active';
+        } else {
+            finalTrackingStatus = null;
+        }
+    }
+
+    // Apply trackingStatus if it was determined
+    if (finalTrackingStatus !== undefined) {
+        if (finalTrackingStatus === null) {
+            updatePayload.$unset.trackingStatus = "";
+            updatePayload.$unset.trackingEnabled = ""; // Also remove legacy field
+        } else {
+            updatePayload.$set.trackingStatus = finalTrackingStatus;
+            updatePayload.$unset.trackingEnabled = ""; // Remove legacy field
+        }
+    }
+
     for (const field of ALLOWED_UPDATE_FIELDS) {
+        // Skip trackingStatus and trackingEnabled as they're handled above
+        if (field === 'trackingStatus' || field === 'trackingEnabled') {
+            continue;
+        }
+
         if (Object.prototype.hasOwnProperty.call(updateFields, field)) {
             hasValidFields = true;
             // [v1.3] Ensure benchmarkCPM is stored as a number
@@ -76,10 +115,6 @@ exports.handler = async (event, context) => {
                 } else {
                     updatePayload.$unset[field] = ""; // Unset if empty or invalid
                 }
-            } 
-            // [v1.4] Ensure trackingEnabled is stored as a boolean
-            else if (field === 'trackingEnabled') {
-                updatePayload.$set[field] = updateFields[field] === true || updateFields[field] === 'true' ? true : false;
             }
             else if (updateFields[field] === null || updateFields[field] === '') {
                 updatePayload.$unset[field] = "";

@@ -1,7 +1,10 @@
 /**
  * @file addProject.js
- * @version 1.3-tracking-enabled
+ * @version 1.4-tracking-status
  * @description 接收前端发送的项目数据，创建一个新的项目文档。
+ * * --- 更新日志 (v1.4) ---
+ * - [字段升级] 支持新的 `trackingStatus` 字段 (null/'active'/'archived')，替代 `trackingEnabled`
+ * - [向后兼容] 仍然支持旧的 `trackingEnabled` 布尔字段
  * * --- 更新日志 (v1.3) ---
  * - [新增字段] 新增了对 `trackingEnabled` (效果追踪开关) 字段的支持。
  * - 在创建新项目时，会接收并存储这个配置项，默认值为 false。
@@ -64,20 +67,33 @@ exports.handler = async (event, context) => {
 
     const now = new Date();
     
+    // [v1.4] Handle tracking status (new field) or trackingEnabled (legacy field)
+    let trackingStatus = null;
+    if (inputData.trackingStatus) {
+      // Use new trackingStatus field if provided
+      trackingStatus = ['active', 'archived'].includes(inputData.trackingStatus) ? inputData.trackingStatus : null;
+    } else if (inputData.trackingEnabled === true || inputData.trackingEnabled === 'true') {
+      // Convert legacy trackingEnabled to new format
+      trackingStatus = 'active';
+    }
+
     const newProjectDocument = {
       _id: new ObjectId(),
       id: `proj_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`,
       ...inputData,
       // [v1.2] Safely parse benchmarkCPM to a number
       benchmarkCPM: inputData.benchmarkCPM ? parseFloat(inputData.benchmarkCPM) : null,
-      // [v1.3] Parse trackingEnabled to boolean, default to false
-      trackingEnabled: inputData.trackingEnabled === true || inputData.trackingEnabled === 'true' ? true : false,
+      // [v1.4] Store trackingStatus (null, 'active', or 'archived')
+      trackingStatus: trackingStatus,
       status: '执行中',
       adjustments: [],
       auditLog: [],
       createdAt: now,
       updatedAt: now,
     };
+
+    // Remove legacy field if present
+    delete newProjectDocument.trackingEnabled;
     
     delete newProjectDocument._id;
     newProjectDocument._id = new ObjectId();
