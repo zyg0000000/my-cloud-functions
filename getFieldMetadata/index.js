@@ -2,9 +2,12 @@
 
  * @file getFieldMetadata/index.js
 
- * @version 1.0.0
+ * @version 1.1.0
 
  * @description 返回所有可导出字段的元数据，支持前端动态渲染维度
+
+ * @changelog
+ * - [v1.1.0] 添加 taskId (星图任务ID) 和 videoId (视频ID) 字段到 collaboration 和 project 实体
 
  */
 
@@ -116,6 +119,10 @@ const FIELD_METADATA = {
 
             { id: 'collaboration_publishDate', label: '实际发布日期', backendKey: '实际发布日期', dataType: 'date' },
 
+            { id: 'taskId', label: '星图任务ID', backendKey: '星图任务ID', dataType: 'string' },
+
+            { id: 'videoId', label: '视频ID', backendKey: '视频ID', dataType: 'string' },
+
         ],
 
         '项目信息': [
@@ -159,6 +166,10 @@ const FIELD_METADATA = {
             { id: 'collaboration_plannedReleaseDate', label: '计划发布日期', backendKey: '计划发布日期', dataType: 'date' },
 
             { id: 'collaboration_publishDate', label: '实际发布日期', backendKey: '实际发布日期', dataType: 'date' },
+
+            { id: 'taskId', label: '星图任务ID', backendKey: '星图任务ID', dataType: 'string' },
+
+            { id: 'videoId', label: '视频ID', backendKey: '视频ID', dataType: 'string' },
 
         ],
 
