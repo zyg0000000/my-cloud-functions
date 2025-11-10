@@ -1,10 +1,11 @@
 /**
  * @file exportComprehensiveData/index.js
- * @version 1.2
+ * @version 1.3
  * @description "数据导出中心"后端核心云函数 (多主体聚合引擎)。
  * - 支持 'talent', 'collaboration', 'project' 多种导出主体 (entity)。
  * - 根据前端请求的 entity, fields, filters 动态构建 MongoDB Aggregation Pipeline。
  * - 聚合来自 talents, collaborations, works, projects, automation-tasks 多个集合的数据。
+ * - [v1.3] 新增支持 taskId (星图任务ID) 和 videoId (视频ID) 字段导出
  */
 
 const { MongoClient } = require('mongodb');
@@ -161,10 +162,18 @@ function buildCollaborationPipeline(db, fields, filters, entity) {
         switch (field) {
             case 'collaboration_status': projectStage['合作状态'] = '$status'; break;
             case 'collaboration_amount': projectStage['合作金额'] = '$amount'; break;
+            case 'collaboration_orderType': projectStage['下单方式'] = '$orderType'; break;
+            case 'collaboration_plannedReleaseDate': projectStage['计划发布日期'] = '$plannedReleaseDate'; break;
+            case 'collaboration_publishDate': projectStage['实际发布日期'] = '$publishDate'; break;
             case 'project_name': projectStage['项目名称'] = '$projectInfo.name'; break;
+            case 'project_type': projectStage['项目类型'] = '$projectInfo.type'; break;
             case 'nickname': projectStage['达人昵称'] = '$talentInfo.nickname'; break;
             case 'talentTier': projectStage['达人层级'] = '$talentInfo.talentTier'; break;
-            case 'work_total_t7_views': projectStage['T+7 播放量'] = '$workInfo.t7_totalViews'; break;
+            case 'work_t7_totalViews': projectStage['T+7 播放量'] = '$workInfo.t7_totalViews'; break;
+            case 'work_t7_likeCount': projectStage['T+7 点赞数'] = '$workInfo.t7_likeCount'; break;
+            // [v1.3] 新增字段映射
+            case 'taskId': projectStage['星图任务ID'] = '$taskId'; break;
+            case 'videoId': projectStage['视频ID'] = '$videoId'; break;
             // 在此添加更多字段映射...
         }
     });
