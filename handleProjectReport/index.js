@@ -1,7 +1,11 @@
 /**
  * @file handleProjectReport/index.js
- * @version 3.7 - Time-based Filtering Fix
- * @description [V3.7-修正版] 修复了数据录入提醒和已发布视频统计的时间过滤问题。
+ * @version 3.9 - Enhanced Archived Project Support
+ * @description [V3.9] 增强归档项目支持，返回数据日期范围（firstReportDate 和 lastReportDate）
+ * - [新增功能] getReportData 增加 firstReportDate 字段，用于归档项目的日期范围限制
+ * - [V3.8] 增加归档项目支持，返回最后有数据的日期
+ * - [新增功能] getReportData 增加 lastReportDate 字段，用于归档项目的默认日期显示
+ * - [V3.7-修正版] 修复了数据录入提醒和已发布视频统计的时间过滤问题
  * - [核心修正] publishedCollaborations 增加时间过滤：只统计在选择日期之前或当日发布的视频
  * - [核心修正] missingDataVideos 增加 publishDate 字段，并过滤当日发布的视频
  * - [逻辑统一] overview.totalViews 改用 overallTotalViews，与 averageCPM 计算保持一致
@@ -151,7 +155,28 @@ async function getReportData(db, projectId, date) {
         averageCPM: totalAmount > 0 && overallTotalViews > 0 ? (totalAmount / overallTotalViews) * 1000 : 0
     };
 
-    return { overview, details, missingDataVideos };
+    // [V3.8 新增] 计算最后有数据的日期和第一个有数据的日期（用于归档项目）
+    let lastReportDate = null;
+    let firstReportDate = null;
+    if (works.length > 0) {
+        const allDates = [];
+        works.forEach(work => {
+            if (work.dailyStats && work.dailyStats.length > 0) {
+                work.dailyStats.forEach(stat => {
+                    if (stat.totalViews > 0) {  // 确保有有效数据
+                        allDates.push(stat.date);
+                    }
+                });
+            }
+        });
+        if (allDates.length > 0) {
+            allDates.sort((a, b) => b.localeCompare(a));  // 降序排序
+            lastReportDate = allDates[0];  // 取最新日期
+            firstReportDate = allDates[allDates.length - 1];  // 取最早日期
+        }
+    }
+
+    return { overview, details, missingDataVideos, lastReportDate, firstReportDate };
 }
 
 /**
